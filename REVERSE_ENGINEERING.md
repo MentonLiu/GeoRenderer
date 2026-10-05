@@ -57,4 +57,4 @@ BVH 内部节点的右子节点紧随左子节点。叶起点指向已经按 BVH
 - 原文件标记为桌面和网页都可用，但渲染必须有 WebGL2 和浮点颜色缓冲扩展。
 - 纹理图集会受 `MAX_TEXTURE_SIZE` 和代码中的 8192 上限约束；超出时抛出错误。
 - HDR 解析器支持 Radiance RGBE，尺寸行只接受 `-Y +X` 顺序。
-- `reference/pathtracer.js` 是未改动的原文件；最初的构建产物曾与其字节一致。GeoRenderer 更名后的实现应编辑 `src/` 并重新构建。
+- `reference/pathtracer.js` 是未改动的原文件；最初的构建产物曾与其字节一致。当前开发源码位于 `plugins/georenderer/src/`，由 esbuild 生成 `plugins/georenderer/georenderer.js`。

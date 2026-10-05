@@ -1,6 +1,6 @@
 # Apple GPU 优化分支
 
-分支：`perf/apple-gpu`。优化仍运行在 Blockbench 的 WebGL2 上，不依赖原生 Metal API。Apple 将其 GPU 描述为基于 tile 的延迟渲染架构；减少无需保留的渲染附件内容，有机会降低片上与外部内存之间的传输。这里把这条原则用于插件的全屏渲染流程。参考：[Apple GPU 的 tile 渲染说明](https://developer.apple.com/documentation/metal/tailor-your-apps-for-apple-gpus-and-tile-based-deferred-rendering)、[GPU 内存带宽分析](https://developer.apple.com/documentation/xcode/measuring-the-gpus-use-of-memory-bandwidth)。这是从 Metal 架构资料推导出的 WebGL2 优化方向，尚未测得实际提速。
+优化最初在 `perf/apple-gpu` 分支实现，现已迁入模块化插件工程。优化仍运行在 Blockbench 的 WebGL2 上，不依赖原生 Metal API。Apple 将其 GPU 描述为基于 tile 的延迟渲染架构；减少无需保留的渲染附件内容，有机会降低片上与外部内存之间的传输。这里把这条原则用于插件的全屏渲染流程。参考：[Apple GPU 的 tile 渲染说明](https://developer.apple.com/documentation/metal/tailor-your-apps-for-apple-gpus-and-tile-based-deferred-rendering)、[GPU 内存带宽分析](https://developer.apple.com/documentation/xcode/measuring-the-gpus-use-of-memory-bandwidth)。这是从 Metal 架构资料推导出的 WebGL2 优化方向，尚未测得实际提速。
 
 ## 改动
 
