@@ -1,0 +1,10 @@
+{
+  "name": "georenderer",
+  "private": true,
+  "version": "1.5.1",
+  "description": "GeoRenderer Blockbench path tracing plugin",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/build.mjs --check && node --check georenderer.js && node --test"
+  }
+}
