@@ -17,6 +17,7 @@
 		res_mode: 'resize', res_width: 'resize', res_height: 'resize',
 		render_mode: 'post', preview_samples: 'post', final_samples: 'post',
 		auto_follow: 'post', auto_sync: 'post', interactive_scale: 'post',
+		gpu_profile: 'post',
 	};
 
 	const SKY_PRESETS = {
@@ -76,4 +77,3 @@
 			localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 		} catch (err) { }
 	}
-

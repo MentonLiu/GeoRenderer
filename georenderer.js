@@ -31,6 +31,7 @@
 		denoise: true,
 		denoise_strength: 1.0,
 		interactive_scale: 0.2,
+		gpu_profile: 'auto',
 		auto_follow: false,
 
 		ortho: false,
@@ -1235,15 +1236,19 @@ uniform float uGroundY, uGroundRough, uGroundMetal, uGroundRadius;
 uniform vec3 uGroundColor;
 
 uniform sampler2D uAccum;
+#ifndef PTR_COLOR_ONLY
 uniform sampler2D uAccumAlb;
 uniform sampler2D uAccumNrm;
 uniform sampler2D uAccumMom;
+#endif
 uniform int uReset;
 
 layout(location = 0) out vec4 outColor;
+#ifndef PTR_COLOR_ONLY
 layout(location = 1) out vec4 outAlbedo;
 layout(location = 2) out vec4 outNormal;
 layout(location = 3) out vec4 outMoment;
+#endif
 
 uint g_rng;
 uint pcgNext() {
@@ -2095,25 +2100,37 @@ void main() {
 	float alpha, depth;
 	vec3 alb, nrm;
 	vec3 c = tracePath(ro, rd, alpha, alb, nrm, depth);
+#ifndef PTR_COLOR_ONLY
 	vec3 demod = c / max(alb, vec3(0.02));
 	float l = dot(demod, vec3(0.2126, 0.7152, 0.0722));
+#endif
 
 	vec4 prev = vec4(0.0);
+#ifndef PTR_COLOR_ONLY
 	vec4 prevA = vec4(0.0);
 	vec4 prevN = vec4(0.0);
 	vec4 prevM = vec4(0.0);
+#endif
 	if (uReset == 0) {
 		prev = texelFetch(uAccum, px, 0);
+#ifndef PTR_COLOR_ONLY
 		prevA = texelFetch(uAccumAlb, px, 0);
 		prevN = texelFetch(uAccumNrm, px, 0);
 		prevM = texelFetch(uAccumMom, px, 0);
+#endif
 	}
 	outColor = prev + vec4(c, alpha);
+#ifndef PTR_COLOR_ONLY
 	outAlbedo = prevA + vec4(alb, 1.0);
 	outNormal = prevN + vec4(nrm, 1.0);
 	outMoment = prevM + vec4(l, l * l, depth, 1.0);
+#endif
 }
 `;
+
+	const FS_PATHTRACE_COLOR_ONLY = FS_PATHTRACE.replace(
+		'#version 300 es\n', '#version 300 es\n#define PTR_COLOR_ONLY 1\n'
+	);
 
 	const FS_DENOISE = `#version 300 es
 precision highp float;
@@ -2414,7 +2431,6 @@ void main() {
 }
 `;
 
-
 	class PathTracer {
 		constructor(canvas) {
 			this.canvas = canvas;
@@ -2429,6 +2445,10 @@ void main() {
 			this.buffers = null;
 			this.ping = 0;
 			this.disposed = false;
+			this.appleGpuDetected = false;
+			this.appleGpuOptimization = false;
+			this.colorOnlyPass = false;
+			this.colorOnlyProgramFailed = false;
 		}
 
 		init() {
@@ -2447,8 +2467,29 @@ void main() {
 			this.extFloat = gl.getExtension('EXT_color_buffer_float');
 			if (!this.extFloat) throw new Error('缺少 EXT_color_buffer_float 扩展，无法进行浮点累积渲染。');
 			gl.getExtension('OES_texture_float_linear');
+			let renderer = '';
+			try {
+				const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+				renderer = debugInfo
+					? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+					: gl.getParameter(gl.RENDERER);
+			} catch (err) { }
+			this.appleGpuDetected = /\bApple\b/i.test(String(renderer || ''));
+			this.discardAttachments = [
+				[gl.COLOR_ATTACHMENT0],
+				[gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1],
+				[gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3],
+			];
 
 			this.progPT = createProgram(gl, VS_FULLSCREEN, FS_PATHTRACE, 'pathtrace');
+			if (this.appleGpuDetected) {
+				try {
+					this.progPTColorOnly = createProgram(gl, VS_FULLSCREEN, FS_PATHTRACE_COLOR_ONLY, 'pathtrace_color_only');
+				} catch (err) {
+					this.colorOnlyProgramFailed = true;
+					console.warn('[GeoRenderer] Apple GPU 预览着色器不可用，已使用标准着色器', err);
+				}
+			}
 			this.progDN = createProgram(gl, VS_FULLSCREEN, FS_DENOISE, 'denoise');
 			this.progCM = createProgram(gl, VS_FULLSCREEN, FS_COMPOSITE, 'composite');
 			this.progBB = createProgram(gl, VS_FULLSCREEN, FS_BLOOM_BRIGHT, 'bloom_bright');
@@ -2633,6 +2674,8 @@ void main() {
 				a: a, b: b,
 				fboA: createFBO(gl, [a.color, a.albedo, a.normal, a.moment]),
 				fboB: createFBO(gl, [b.color, b.albedo, b.normal, b.moment]),
+				fboColorA: createFBO(gl, [a.color]),
+				fboColorB: createFBO(gl, [b.color]),
 				d0: createRenderTexture(gl, w, h, gl.RGBA16F),
 				d1: createRenderTexture(gl, w, h, gl.RGBA16F),
 				v0: createRenderTexture(gl, w, h, gl.R32F),
@@ -2676,6 +2719,8 @@ void main() {
 			gl.deleteTexture(b.v1);
 			gl.deleteFramebuffer(b.fboA);
 			gl.deleteFramebuffer(b.fboB);
+			gl.deleteFramebuffer(b.fboColorA);
+			gl.deleteFramebuffer(b.fboColorB);
 			gl.deleteFramebuffer(b.fboD0);
 			gl.deleteFramebuffer(b.fboD1);
 			this.buffers = null;
@@ -2702,6 +2747,19 @@ void main() {
 			this.camera = cam;
 		}
 
+		useAppleGpuPath(settings) {
+			return settings.gpu_profile === 'apple'
+				|| (settings.gpu_profile !== 'standard' && this.appleGpuDetected);
+		}
+
+		bindPassTarget(fbo, attachmentCount) {
+			const gl = this.gl;
+			gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+			if (this.appleGpuOptimization && gl.invalidateFramebuffer) {
+				gl.invalidateFramebuffer(gl.FRAMEBUFFER, this.discardAttachments[attachmentCount === 4 ? 2 : attachmentCount === 2 ? 1 : 0]);
+			}
+		}
+
 		bindTex(unit, tex, name, prog) {
 			const gl = this.gl;
 			gl.activeTexture(gl.TEXTURE0 + unit);
@@ -2710,14 +2768,25 @@ void main() {
 			if (loc) gl.uniform1i(loc, unit);
 		}
 
-		beginFrame(settings) {
+		beginFrame(settings, interactive) {
 			const gl = this.gl;
 			if (!this.buffers || !this.scene || !this.env) return false;
+			this.appleGpuOptimization = this.useAppleGpuPath(settings);
+			if (this.appleGpuOptimization && interactive && !this.progPTColorOnly && !this.colorOnlyProgramFailed) {
+				try {
+					this.progPTColorOnly = createProgram(gl, VS_FULLSCREEN, FS_PATHTRACE_COLOR_ONLY, 'pathtrace_color_only');
+				} catch (err) {
+					this.colorOnlyProgramFailed = true;
+					console.warn('[GeoRenderer] Apple GPU 预览着色器不可用，已使用标准着色器', err);
+				}
+			}
+			this.colorOnlyPass = this.appleGpuOptimization && !!interactive && !!this.progPTColorOnly;
 
 			gl.bindVertexArray(this.vao);
 			gl.viewport(0, 0, this.width, this.height);
 
-			const p = this.progPT;
+			const p = this.colorOnlyPass ? this.progPTColorOnly : this.progPT;
+			this.activePT = p;
 			const u = p.uniforms;
 			gl.useProgram(p.program);
 
@@ -2815,16 +2884,20 @@ void main() {
 			if (!this.buffers || !this.scene || !this.env) return;
 
 			const src = this.ping === 0 ? this.buffers.b : this.buffers.a;
-			const dstFBO = this.ping === 0 ? this.buffers.fboA : this.buffers.fboB;
+			const dstFBO = this.colorOnlyPass
+				? (this.ping === 0 ? this.buffers.fboColorA : this.buffers.fboColorB)
+				: (this.ping === 0 ? this.buffers.fboA : this.buffers.fboB);
 
-			gl.bindFramebuffer(gl.FRAMEBUFFER, dstFBO);
+			this.bindPassTarget(dstFBO, this.colorOnlyPass ? 1 : 4);
 
-			const p = this.progPT;
+			const p = this.activePT;
 			const u = p.uniforms;
 			this.bindTex(11, src.color, 'uAccum', p);
-			this.bindTex(12, src.albedo, 'uAccumAlb', p);
-			this.bindTex(13, src.normal, 'uAccumNrm', p);
-			this.bindTex(14, src.moment, 'uAccumMom', p);
+			if (!this.colorOnlyPass) {
+				this.bindTex(12, src.albedo, 'uAccumAlb', p);
+				this.bindTex(13, src.normal, 'uAccumNrm', p);
+				this.bindTex(14, src.moment, 'uAccumMom', p);
+			}
 
 			gl.uniform1i(u.uSeed, (this.spp * 9781 + 1) | 0);
 			gl.uniform1i(u.uReset, this.spp === 0 ? 1 : 0);
@@ -2842,12 +2915,13 @@ void main() {
 		present(settings) {
 			const gl = this.gl;
 			if (!this.buffers || this.spp === 0) return;
+			this.appleGpuOptimization = this.useAppleGpuPath(settings);
 			const cur = this.currentSet();
 			const invSpp = 1 / this.spp;
 			gl.bindVertexArray(this.vao);
 
 			let denoised = null;
-			const useDenoise = settings.denoise && this.spp < 4096 && settings.denoise_strength > 0;
+			const useDenoise = settings.denoise && !this.colorOnlyPass && this.spp < 4096 && settings.denoise_strength > 0;
 
 			if (useDenoise) {
 				const p = this.progDN;
@@ -2861,7 +2935,7 @@ void main() {
 					const targetFBO = (i % 2 === 0) ? this.buffers.fboD0 : this.buffers.fboD1;
 					const targetTex = (i % 2 === 0) ? this.buffers.d0 : this.buffers.d1;
 					const targetVar = (i % 2 === 0) ? this.buffers.v0 : this.buffers.v1;
-					gl.bindFramebuffer(gl.FRAMEBUFFER, targetFBO);
+					this.bindPassTarget(targetFBO, 2);
 					gl.viewport(0, 0, this.width, this.height);
 					this.bindTex(0, inputTex, 'uColorIn', p);
 					this.bindTex(1, cur.albedo, 'uAlbedoTex', p);
@@ -2884,7 +2958,7 @@ void main() {
 
 			const buf = this.buffers;
 
-			gl.bindFramebuffer(gl.FRAMEBUFFER, buf.fboHDR);
+			this.bindPassTarget(buf.fboHDR, 1);
 			gl.viewport(0, 0, this.width, this.height);
 			{
 				const p = this.progCM;
@@ -2902,7 +2976,7 @@ void main() {
 			if (useBloom) {
 				{
 					const p = this.progBB;
-					gl.bindFramebuffer(gl.FRAMEBUFFER, buf.fboBloomA);
+					this.bindPassTarget(buf.fboBloomA, 1);
 					gl.useProgram(p.program);
 					this.bindTex(0, buf.hdr, 'uHDR', p);
 					gl.uniform1f(p.uniforms.uThreshold, settings.bloom_threshold);
@@ -2913,18 +2987,18 @@ void main() {
 					const p = this.progBL;
 					gl.useProgram(p.program);
 					gl.uniform1f(p.uniforms.uRadius, radius);
-					gl.bindFramebuffer(gl.FRAMEBUFFER, buf.fboBloomB);
+					this.bindPassTarget(buf.fboBloomB, 1);
 					this.bindTex(0, buf.bloomA, 'uTex', p);
 					gl.uniform2f(p.uniforms.uDir, 1, 0);
 					gl.drawArrays(gl.TRIANGLES, 0, 3);
-					gl.bindFramebuffer(gl.FRAMEBUFFER, buf.fboBloomA);
+					this.bindPassTarget(buf.fboBloomA, 1);
 					this.bindTex(0, buf.bloomB, 'uTex', p);
 					gl.uniform2f(p.uniforms.uDir, 0, 1);
 					gl.drawArrays(gl.TRIANGLES, 0, 3);
 				}
 			}
 
-			gl.bindFramebuffer(gl.FRAMEBUFFER, buf.fboTonemap);
+			this.bindPassTarget(buf.fboTonemap, 1);
 			gl.viewport(0, 0, this.width, this.height);
 			{
 				const p = this.progTM;
@@ -2972,7 +3046,7 @@ void main() {
 				gl.deleteTexture(this.env.marg);
 				this.env = null;
 			}
-			[this.progPT, this.progDN, this.progCM, this.progBB, this.progBL, this.progTM, this.progFN].forEach(p => { if (p) gl.deleteProgram(p.program); });
+			[this.progPT, this.progPTColorOnly, this.progDN, this.progCM, this.progBB, this.progBL, this.progTM, this.progFN].forEach(p => { if (p) gl.deleteProgram(p.program); });
 			if (this.dummy2D) gl.deleteTexture(this.dummy2D);
 			if (this.dummyF) gl.deleteTexture(this.dummyF.texture);
 			if (this.dummyR) gl.deleteTexture(this.dummyR);
@@ -2999,8 +3073,6 @@ void main() {
 		const radius = Math.max(1e-3, 0.5 * Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]));
 		return { min: min, max: max, center: center, radius: radius };
 	}
-
-
 	const CSS = `
 #ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }
 #ptr_root * { box-sizing: border-box; }
@@ -3231,6 +3303,7 @@ void main() {
 		res_mode: 'resize', res_width: 'resize', res_height: 'resize',
 		render_mode: 'post', preview_samples: 'post', final_samples: 'post',
 		auto_follow: 'post', auto_sync: 'post', interactive_scale: 'post',
+		gpu_profile: 'post',
 	};
 
 	const SKY_PRESETS = {
@@ -3290,7 +3363,6 @@ void main() {
 			localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 		} catch (err) { }
 	}
-
 	function makeRow(label, ctrls) {
 		return el('div', { class: 'ptr_row' }, [
 			el('label', { text: label, title: label }),
@@ -3675,7 +3747,7 @@ void main() {
 			t.setCameraOnly(PTR.cam.state());
 			const passSettings = PTR.interacting ? interactiveSettings(PTR.settings) : PTR.settings;
 			const n = Math.min(PTR.passesPerFrame, maxSamples - t.spp);
-			if (n > 0 && t.beginFrame(passSettings)) {
+			if (n > 0 && t.beginFrame(passSettings, PTR.interacting)) {
 				for (let i = 0; i < n; i++) t.renderPass();
 				PTR.lastPasses = n;
 			} else {
@@ -3688,7 +3760,6 @@ void main() {
 		}
 		updateStatus();
 	}
-
 	function buildMaterialList() {
 		const host = PTR.nodes.matlist;
 		if (!host) return;
@@ -3844,6 +3915,8 @@ void main() {
 			]),
 			card('性能', 'speed', [
 				rowSlider('交互降采样', 'interactive_scale', 0.2, 1, 0.05, 2),
+				rowSelect('GPU 模式', 'gpu_profile', { auto: '自动检测', apple: 'Apple GPU', standard: '标准' }),
+				el('div', { class: 'ptr_note', text: '自动检测不到 Apple GPU 时，可手动选择 Apple GPU。该模式优化拖动预览和全屏渲染缓冲。' }),
 				rowCheck('线性过滤纹理', 'filter_linear'),
 				rowCheck('自动重载模型', 'auto_follow'),
 			]),
@@ -4018,7 +4091,6 @@ void main() {
 			{ title: '后期', icon: 'tune', cards: postCards },
 		]);
 	}
-
 	function loadEnvFile(file) {
 		const name = file.name || '';
 		const reader = new FileReader();
@@ -4343,7 +4415,7 @@ void main() {
 
 	if (typeof window !== 'undefined' && window.__PATHTRACER_TEST__) {
 		window.__PATHTRACER_INTERNALS__ = {
-			VS_FULLSCREEN, FS_PATHTRACE, FS_DENOISE,
+			VS_FULLSCREEN, FS_PATHTRACE, FS_PATHTRACE_COLOR_ONLY, FS_DENOISE,
 			FS_COMPOSITE, FS_BLOOM_BRIGHT, FS_BLOOM_BLUR, FS_TONEMAP, FS_FINAL,
 			PathTracer, buildBVH, buildMaterials, collectGeometry,
 			generateSkyPixels, buildEnvDistribution, parseHDR, packAtlas,

@@ -36,3 +36,5 @@ npm run check
 自动检查覆盖构建一致性、注册/卸载、BVH、纹理图集、HDR 解码和环境采样分布。实际的 WebGL2 着色器编译与画面效果需要在支持 `EXT_color_buffer_float` 的 Blockbench 环境里确认。
 
 原插件元数据中的作者、版本和更新地址均保留。`pathtracer_preview_settings` 存储键也继续沿用，以读取已有设置。
+
+Apple GPU 分支的改动与验证方式见 [`APPLE_GPU.md`](APPLE_GPU.md)。

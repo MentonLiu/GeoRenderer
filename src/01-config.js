@@ -28,6 +28,7 @@
 		denoise: true,
 		denoise_strength: 1.0,
 		interactive_scale: 0.2,
+		gpu_profile: 'auto',
 		auto_follow: false,
 
 		ortho: false,
