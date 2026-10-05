@@ -67,15 +67,19 @@ uniform float uGroundY, uGroundRough, uGroundMetal, uGroundRadius;
 uniform vec3 uGroundColor;
 
 uniform sampler2D uAccum;
+#ifndef PTR_COLOR_ONLY
 uniform sampler2D uAccumAlb;
 uniform sampler2D uAccumNrm;
 uniform sampler2D uAccumMom;
+#endif
 uniform int uReset;
 
 layout(location = 0) out vec4 outColor;
+#ifndef PTR_COLOR_ONLY
 layout(location = 1) out vec4 outAlbedo;
 layout(location = 2) out vec4 outNormal;
 layout(location = 3) out vec4 outMoment;
+#endif
 
 uint g_rng;
 uint pcgNext() {
@@ -927,25 +931,37 @@ void main() {
 	float alpha, depth;
 	vec3 alb, nrm;
 	vec3 c = tracePath(ro, rd, alpha, alb, nrm, depth);
+#ifndef PTR_COLOR_ONLY
 	vec3 demod = c / max(alb, vec3(0.02));
 	float l = dot(demod, vec3(0.2126, 0.7152, 0.0722));
+#endif
 
 	vec4 prev = vec4(0.0);
+#ifndef PTR_COLOR_ONLY
 	vec4 prevA = vec4(0.0);
 	vec4 prevN = vec4(0.0);
 	vec4 prevM = vec4(0.0);
+#endif
 	if (uReset == 0) {
 		prev = texelFetch(uAccum, px, 0);
+#ifndef PTR_COLOR_ONLY
 		prevA = texelFetch(uAccumAlb, px, 0);
 		prevN = texelFetch(uAccumNrm, px, 0);
 		prevM = texelFetch(uAccumMom, px, 0);
+#endif
 	}
 	outColor = prev + vec4(c, alpha);
+#ifndef PTR_COLOR_ONLY
 	outAlbedo = prevA + vec4(alb, 1.0);
 	outNormal = prevN + vec4(nrm, 1.0);
 	outMoment = prevM + vec4(l, l * l, depth, 1.0);
+#endif
 }
 `;
+
+	const FS_PATHTRACE_COLOR_ONLY = FS_PATHTRACE.replace(
+		'#version 300 es\n', '#version 300 es\n#define PTR_COLOR_ONLY 1\n'
+	);
 
 	const FS_DENOISE = `#version 300 es
 precision highp float;
@@ -1245,5 +1261,4 @@ void main() {
 	fragColor = vec4(color, c.a);
 }
 `;
-
 

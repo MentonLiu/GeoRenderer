@@ -124,3 +124,63 @@ test('environment distribution produces normalized CDFs', () => {
     assert.ok(dist.marg[y + 1] >= dist.marg[y]);
   }
 });
+
+test('Apple GPU mode selects the color-only path during interaction', () => {
+  const { PathTracer, FS_PATHTRACE_COLOR_ONLY, DEFAULTS } = loadPlugin().internals;
+  const tracer = new PathTracer({});
+  tracer.appleGpuDetected = true;
+  assert.equal(DEFAULTS.gpu_profile, 'auto');
+  assert.equal(tracer.useAppleGpuPath({ gpu_profile: 'auto' }), true);
+  assert.equal(tracer.useAppleGpuPath({ gpu_profile: 'standard' }), false);
+  tracer.appleGpuDetected = false;
+  assert.equal(tracer.useAppleGpuPath({ gpu_profile: 'auto' }), false);
+  assert.equal(tracer.useAppleGpuPath({ gpu_profile: 'apple' }), true);
+  assert.match(FS_PATHTRACE_COLOR_ONLY, /#define PTR_COLOR_ONLY 1/);
+  assert.match(FS_PATHTRACE_COLOR_ONLY, /#ifndef PTR_COLOR_ONLY\nlayout\(location = 1\)/);
+});
+
+test('color-only render pass writes one attachment and skips guide textures', () => {
+  const { PathTracer } = loadPlugin().internals;
+  const calls = [];
+  const gl = {
+    FRAMEBUFFER: 1, TEXTURE0: 100, TEXTURE_2D: 2, TRIANGLES: 3,
+    bindFramebuffer(...args) { calls.push(['framebuffer', ...args]); },
+    invalidateFramebuffer(...args) { calls.push(['invalidate', ...args]); },
+    activeTexture(...args) { calls.push(['unit', ...args]); },
+    bindTexture(...args) { calls.push(['texture', ...args]); },
+    uniform1i(...args) { calls.push(['uniform', ...args]); },
+    drawArrays(...args) { calls.push(['draw', ...args]); },
+  };
+  const tracer = new PathTracer({});
+  tracer.gl = gl;
+  tracer.scene = {};
+  tracer.env = {};
+  tracer.buffers = {
+    a: { color: 'a-color', albedo: 'a-albedo', normal: 'a-normal', moment: 'a-moment' },
+    b: { color: 'b-color', albedo: 'b-albedo', normal: 'b-normal', moment: 'b-moment' },
+    fboA: 'full-a', fboColorA: 'color-a',
+  };
+  tracer.discardAttachments = [['color'], ['color', 'variance'], ['color', 'albedo', 'normal', 'moment']];
+  tracer.appleGpuOptimization = true;
+  tracer.colorOnlyPass = true;
+  tracer.activePT = { uniforms: { uAccum: 'accum', uSeed: 'seed', uReset: 'reset' } };
+  tracer.renderPass();
+  assert.deepEqual(calls.find(call => call[0] === 'framebuffer'), ['framebuffer', 1, 'color-a']);
+  assert.deepEqual(calls.find(call => call[0] === 'invalidate'), ['invalidate', 1, tracer.discardAttachments[0]]);
+  assert.deepEqual(calls.filter(call => call[0] === 'texture').map(call => call[2]), ['b-color']);
+  assert.equal(tracer.spp, 1);
+
+  calls.length = 0;
+  tracer.ping = 0;
+  tracer.colorOnlyPass = false;
+  tracer.appleGpuOptimization = false;
+  tracer.activePT = { uniforms: {
+    uAccum: 'accum', uAccumAlb: 'albedo', uAccumNrm: 'normal', uAccumMom: 'moment',
+    uSeed: 'seed', uReset: 'reset',
+  } };
+  tracer.renderPass();
+  assert.deepEqual(calls.find(call => call[0] === 'framebuffer'), ['framebuffer', 1, 'full-a']);
+  assert.equal(calls.some(call => call[0] === 'invalidate'), false);
+  assert.deepEqual(calls.filter(call => call[0] === 'texture').map(call => call[2]),
+    ['b-color', 'b-albedo', 'b-normal', 'b-moment']);
+});
