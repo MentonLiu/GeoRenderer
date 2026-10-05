@@ -5,9 +5,29 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import vm from 'node:vm';
+import { build } from 'esbuild';
+import { DEFAULTS } from '../plugins/georenderer/src/core/config.js';
+import { buildBVH } from '../plugins/georenderer/src/scene/bvh.js';
+import { packAtlas } from '../plugins/georenderer/src/scene/atlas.js';
+import { buildEnvDistribution, parseHDR } from '../plugins/georenderer/src/scene/environment.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const bundle = await readFile(path.join(root, 'georenderer.js'), 'utf8');
+const bundle = await readFile(path.join(root, 'plugins/georenderer/georenderer.js'), 'utf8');
+const rendererBuild = await build({
+  stdin: {
+    contents: "export { PathTracer } from './plugins/georenderer/src/gpu/path-tracer.js'; export { FS_PATHTRACE_COLOR_ONLY } from './plugins/georenderer/src/gpu/shaders.js';",
+    resolveDir: root,
+    sourcefile: 'renderer-test-entry.js',
+  },
+  bundle: true,
+  write: false,
+  platform: 'node',
+  format: 'esm',
+  loader: { '.glsl': 'text' },
+});
+const { PathTracer, FS_PATHTRACE_COLOR_ONLY } = await import(
+  'data:text/javascript;base64,' + Buffer.from(rendererBuild.outputFiles[0].contents).toString('base64')
+);
 
 function loadPlugin() {
   let plugin;
@@ -15,8 +35,8 @@ function loadPlugin() {
   const actions = [];
   const css = [];
   const sandbox = {
-    window: { __PATHTRACER_TEST__: true },
-    BBPlugin: { register(id, definition) { plugin = { id, ...definition }; } },
+    window: {},
+    Plugin: { register(id, definition) { plugin = { id, ...definition }; } },
     Blockbench: {
       addCSS() {
         const handle = { deleted: false, delete() { this.deleted = true; } };
@@ -40,7 +60,7 @@ function loadPlugin() {
     console,
   };
   vm.runInNewContext(bundle, sandbox, { filename: 'georenderer.js' });
-  return { plugin, internals: sandbox.window.__PATHTRACER_INTERNALS__, listeners, actions, css };
+  return { plugin, listeners, actions, css };
 }
 
 test('the original reference remains unchanged', async () => {
@@ -62,8 +82,35 @@ test('registration and unload remove Blockbench resources', () => {
   assert.equal(listeners.size, 0);
 });
 
+test('Blockbench source modules have no circular or external imports', async () => {
+  const result = await build({
+    entryPoints: [path.join(root, 'plugins/georenderer/src/index.js')],
+    bundle: true,
+    write: false,
+    platform: 'browser',
+    format: 'iife',
+    loader: { '.css': 'text', '.glsl': 'text' },
+    metafile: true,
+  });
+  const graph = new Map();
+  for (const [name, input] of Object.entries(result.metafile.inputs)) {
+    for (const dependency of input.imports) assert.notEqual(dependency.external, true);
+    graph.set(name, input.imports.map(dependency => dependency.path).filter(dependency => dependency.endsWith('.js')));
+  }
+  const active = new Set();
+  const complete = new Set();
+  function visit(name) {
+    assert.equal(active.has(name), false, `Circular import at ${name}`);
+    if (complete.has(name)) return;
+    active.add(name);
+    for (const dependency of graph.get(name) || []) visit(dependency);
+    active.delete(name);
+    complete.add(name);
+  }
+  for (const name of graph.keys()) visit(name);
+});
+
 test('BVH stores a complete triangle permutation and valid root bounds', () => {
-  const { buildBVH } = loadPlugin().internals;
   const triangles = new Float32Array([
     0, 0, 0, 1, 0, 0, 0, 1, 0,
     10, 0, 0, 11, 0, 0, 10, 1, 0,
@@ -80,7 +127,6 @@ test('BVH stores a complete triangle permutation and valid root bounds', () => {
 });
 
 test('texture atlas keeps rectangles in bounds without overlap', () => {
-  const { packAtlas } = loadPlugin().internals;
   const packed = packAtlas([[40, 40], [50, 10], [5, 15]], 256);
   assert.ok(packed);
   assert.equal(packed.rects.length, 3);
@@ -96,7 +142,6 @@ test('texture atlas keeps rectangles in bounds without overlap', () => {
 });
 
 test('Radiance HDR RLE scanline decodes RGBE values', () => {
-  const { parseHDR } = loadPlugin().internals;
   const header = new TextEncoder().encode('#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 8\n');
   const pixels = Uint8Array.from([2, 2, 0, 8, 136, 128, 136, 64, 136, 32, 136, 129]);
   const bytes = new Uint8Array(header.length + pixels.length);
@@ -110,7 +155,6 @@ test('Radiance HDR RLE scanline decodes RGBE values', () => {
 });
 
 test('environment distribution produces normalized CDFs', () => {
-  const { buildEnvDistribution } = loadPlugin().internals;
   const pixels = new Float32Array(256 * 128 * 4).fill(1);
   const dist = buildEnvDistribution(pixels, 256, 128);
   assert.equal(dist.width, 256);
@@ -126,7 +170,6 @@ test('environment distribution produces normalized CDFs', () => {
 });
 
 test('Apple GPU mode selects the color-only path during interaction', () => {
-  const { PathTracer, FS_PATHTRACE_COLOR_ONLY, DEFAULTS } = loadPlugin().internals;
   const tracer = new PathTracer({});
   tracer.appleGpuDetected = true;
   assert.equal(DEFAULTS.gpu_profile, 'auto');
@@ -140,7 +183,6 @@ test('Apple GPU mode selects the color-only path during interaction', () => {
 });
 
 test('color-only render pass writes one attachment and skips guide textures', () => {
-  const { PathTracer } = loadPlugin().internals;
   const calls = [];
   const gl = {
     FRAMEBUFFER: 1, TEXTURE0: 100, TEXTURE_2D: 2, TRIANGLES: 3,
