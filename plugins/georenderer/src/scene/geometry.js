@@ -1,4 +1,5 @@
 import { CUBE_FACE_NORMALS, triangleFacesInward, vCross, vDot, vNorm, vSub } from '../core/math.js';
+import { groupChainForElement } from './group-overrides.js';
 
 export const MF_HAS_COLOR = 1;
 export const MF_HAS_MER = 2;
@@ -95,6 +96,7 @@ export function collectGeometry() {
 	const normals = [];
 	const uvs = [];
 	const texRefs = [];
+	const groupRefs = [];
 	const flips = [];
 	const negativeCube = [];
 	const insideOnly = [];
@@ -109,6 +111,7 @@ export function collectGeometry() {
 	elements.forEach(element => {
 		if (!element || element.visibility === false) return;
 		const mesh = element.mesh;
+		const groupChain = groupChainForElement(element);
 		if (!mesh || !mesh.geometry || mesh.visible === false) return;
 		const geo = mesh.geometry;
 		const posAttr = geo.attributes && geo.attributes.position;
@@ -190,6 +193,7 @@ export function collectGeometry() {
 				} catch (err) { }
 			}
 			texRefs.push(tex || null);
+			groupRefs.push(groupChain);
 			flips.push(mirrored);
 			negativeCube.push(!!hasNegativeSize);
 			insideOnly.push(insideOnlyFace);
@@ -201,6 +205,7 @@ export function collectGeometry() {
 		normals: new Float32Array(normals),
 		uvs: new Float32Array(uvs),
 		texRefs: texRefs,
+		groupRefs: groupRefs,
 		flips: flips,
 		negativeCube: negativeCube,
 		insideOnly: insideOnly,

@@ -5,6 +5,8 @@ const STORAGE_KEY = 'pathtracer_preview_settings';
 
 export const CHANGE_KIND = {
 	def_roughness: 'scene', def_metalness: 'scene', emissive_strength: 'scene',
+	ground_texture_uuid: 'scene', ground_texture_scale: 'reset',
+	time_of_day: 'env',
 	alpha_cutoff: 'scene', alpha_mode: 'scene', render_sides: 'scene',
 	env_mode: 'env', sun_enable: 'env', sun_elevation: 'env', sun_azimuth: 'env',
 	sun_intensity: 'env', sun_color: 'env', sky_zenith: 'env', sky_horizon: 'env',
@@ -37,6 +39,9 @@ export const PTR = {
 	cam: new OrbitCam(),
 	settings: Object.assign({}, DEFAULTS),
 	overrides: {},
+	groupOverrides: {},
+	sceneCubemap: null,
+	scenePresetRequest: 0,
 	customEnv: null,
 	customEnvName: '',
 	open: false,
@@ -73,6 +78,7 @@ export function loadSettings() {
 			const data = JSON.parse(raw);
 			for (const k in DEFAULTS) if (data[k] !== undefined) PTR.settings[k] = data[k];
 			if (data.__overrides) PTR.overrides = data.__overrides;
+			if (data.__groups) PTR.groupOverrides = data.__groups;
 		}
 	} catch (err) { }
 }
@@ -81,6 +87,7 @@ export function saveSettings() {
 	try {
 		const data = Object.assign({}, PTR.settings);
 		data.__overrides = PTR.overrides;
+		data.__groups = PTR.groupOverrides;
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 	} catch (err) { }
 }

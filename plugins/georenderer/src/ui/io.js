@@ -5,6 +5,8 @@ import { showError } from './render-loop.js';
 import { PTR, saveSettings } from './state.js';
 
 export function loadEnvFile(file) {
+	PTR.scenePresetRequest++;
+	PTR.sceneCubemap = null;
 	const name = file.name || '';
 	const reader = new FileReader();
 	reader.onerror = () => showError(new Error('读取文件失败'));

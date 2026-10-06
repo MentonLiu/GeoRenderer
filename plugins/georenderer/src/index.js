@@ -2,6 +2,8 @@ import { PLUGIN_ID } from './core/config.js';
 import { rebuildScene, updateStatus } from './ui/render-loop.js';
 import { PTR, loadSettings } from './ui/state.js';
 import { closeWindow, openWindow } from './ui/window.js';
+import { buildGroupList } from './ui/group-panel.js';
+import { buildMaterialList } from './ui/material-panel.js';
 import CSS from './assets/georenderer.css';
 
 let action = null;
@@ -46,6 +48,10 @@ Plugin.register(PLUGIN_ID, {
 		try { MenuBar.addAction(action, 'tools'); } catch (err) { }
 
 		eventHandler = () => {
+			if (PTR.raster) PTR.raster.refreshModel();
+			if (PTR.refreshGroundTextures) PTR.refreshGroundTextures();
+			if (PTR.nodes.groupList) buildGroupList();
+			if (PTR.nodes.matlist) buildMaterialList();
 			if (!PTR.open || !PTR.tracer) return;
 			if (PTR.settings.auto_follow) {
 				clearTimeout(PTR.rebuildTimer);

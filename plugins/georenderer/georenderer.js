@@ -38,6 +38,8 @@
     auto_focus: true,
     auto_sync: false,
     env_mode: "sky",
+    scene_preset: "",
+    time_of_day: 12,
     env_intensity: 1,
     env_rotation: 0,
     bg_mode: "env",
@@ -58,6 +60,8 @@
     ground_on: true,
     ground_y: 0,
     ground_color: "#a8a8a8",
+    ground_texture_uuid: "",
+    ground_texture_scale: 1,
     ground_rough: 0.9,
     ground_metal: 0,
     ground_radius: 0,
@@ -225,6 +229,9 @@
     def_roughness: "scene",
     def_metalness: "scene",
     emissive_strength: "scene",
+    ground_texture_uuid: "scene",
+    ground_texture_scale: "reset",
+    time_of_day: "env",
     alpha_cutoff: "scene",
     alpha_mode: "scene",
     render_sides: "scene",
@@ -273,19 +280,15 @@
     interactive_scale: "post",
     gpu_profile: "post"
   };
-  var SKY_PRESETS = {
-    "正午": { env_mode: "sky", sun_enable: true, sun_elevation: 66, sun_azimuth: 140, sun_intensity: 6, sun_angle: 1.2, sun_color: "#fff6e8", sky_zenith: "#3c78c8", sky_horizon: "#c6dcf2", sky_ground: "#5a5a5e", sky_haze: 0.3, env_intensity: 1 },
-    "黄昏": { env_mode: "sky", sun_enable: true, sun_elevation: 7, sun_azimuth: 250, sun_intensity: 5, sun_angle: 2, sun_color: "#ff9a4d", sky_zenith: "#2b3f7a", sky_horizon: "#ffb27a", sky_ground: "#3a3238", sky_haze: 0.75, env_intensity: 1.1 },
-    "阴天": { env_mode: "sky", sun_enable: false, sun_intensity: 0, sky_zenith: "#b9c3cc", sky_horizon: "#dde3e8", sky_ground: "#6a6a6e", sky_haze: 1, env_intensity: 1.6 },
-    "夜晚": { env_mode: "sky", sun_enable: true, sun_elevation: 42, sun_azimuth: 300, sun_intensity: 0.35, sun_angle: 3, sun_color: "#c8d8ff", sky_zenith: "#080d1c", sky_horizon: "#16203a", sky_ground: "#0a0a10", sky_haze: 0.2, env_intensity: 1 },
-    "影棚": { env_mode: "gradient", sun_enable: true, sun_elevation: 35, sun_azimuth: 45, sun_intensity: 4, sun_angle: 12, sun_color: "#ffffff", grad_top: "#cfcfcf", grad_bottom: "#131316", env_intensity: 1, bg_mode: "color", bg_color: "#1b1b20" }
-  };
   var PTR = {
     dialog: null,
     tracer: null,
     cam: new OrbitCam(),
     settings: Object.assign({}, DEFAULTS),
     overrides: {},
+    groupOverrides: {},
+    sceneCubemap: null,
+    scenePresetRequest: 0,
     customEnv: null,
     customEnvName: "",
     open: false,
@@ -320,6 +323,7 @@
         const data = JSON.parse(raw);
         for (const k in DEFAULTS) if (data[k] !== void 0) PTR.settings[k] = data[k];
         if (data.__overrides) PTR.overrides = data.__overrides;
+        if (data.__groups) PTR.groupOverrides = data.__groups;
       }
     } catch (err) {
     }
@@ -328,6 +332,7 @@
     try {
       const data = Object.assign({}, PTR.settings);
       data.__overrides = PTR.overrides;
+      data.__groups = PTR.groupOverrides;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch (err) {
     }
@@ -346,7 +351,7 @@
     const t = PTR.tracer;
     if (!t || !PTR.open) return;
     try {
-      const scene = t.buildScene(PTR.settings, PTR.overrides);
+      const scene = t.buildScene(PTR.settings, PTR.overrides, PTR.groupOverrides);
       PTR.stale = false;
       if (PTR.refreshMaterialList) PTR.refreshMaterialList();
       updateStatus(scene);
@@ -544,7 +549,7 @@
   var fullscreen_vert_default = "#version 300 es\nvoid main() {\n	vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n	gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n}\n";
 
   // plugins/georenderer/src/shaders/pathtrace.frag.glsl
-  var pathtrace_frag_default = "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\n\n#define PI 3.141592653589793\n#define INV_PI 0.3183098861837907\n#define TFAR 1.0e20\n#define RAY_EPS 1.0e-3\n\n#define MF_HAS_COLOR   1\n#define MF_HAS_MER     2\n#define MF_HAS_NORMAL  4\n#define MF_FULLBRIGHT  8\n#define MF_WRAP_REPEAT 16\n#define MF_ADDITIVE    32\n#define MF_HAS_EMISSIVE_MAP 64\n#define MF_EMIS_MAIN_COLOR  128\n#define MF_EMIS_CUSTOM_COLOR 256\n\nuniform vec2 uResolution;\nuniform int  uSeed;\nuniform int  uMaxBounce;\nuniform int  uLightSamples;\nuniform float uClamp;\nuniform int  uFilterLinear;\n\nuniform vec3 uCamPos, uCamRight, uCamUp, uCamForward;\nuniform float uTanHalfFov, uAspect, uOrthoHalfHeight;\nuniform int  uOrtho;\nuniform float uAperture, uFocusDist;\n\nuniform sampler2D uTriPos;\nuniform sampler2D uTriAttr;\nuniform sampler2D uBVH;\nuniform sampler2D uMat;\nuniform sampler2D uAtlasC;\nuniform sampler2D uAtlasM;\nuniform sampler2D uAtlasN;\nuniform sampler2D uAtlasE;\nuniform sampler2D uLightTex;\nuniform int uTriPosW, uTriAttrW, uBVHW, uMatW, uLightW;\nuniform int uTriCount, uLightCount;\n\nuniform sampler2D uEnv;\nuniform sampler2D uEnvCond;\nuniform sampler2D uEnvMarg;\nuniform ivec2 uEnvDist;\nuniform float uEnvIntensity, uEnvRotation;\nuniform int uBgMode;\nuniform vec3 uBgColor;\n\nuniform int  uSunEnable;\nuniform vec3 uSunDir;\nuniform float uSunCosRadius, uSunSolidAngle;\nuniform vec3 uSunRadiance;\n\nuniform int  uGroundOn, uGroundCatcher;\nuniform float uGroundY, uGroundRough, uGroundMetal, uGroundRadius;\nuniform vec3 uGroundColor;\n\nuniform sampler2D uAccum;\n#ifndef PTR_COLOR_ONLY\nuniform sampler2D uAccumAlb;\nuniform sampler2D uAccumNrm;\nuniform sampler2D uAccumMom;\n#endif\nuniform int uReset;\n\nlayout(location = 0) out vec4 outColor;\n#ifndef PTR_COLOR_ONLY\nlayout(location = 1) out vec4 outAlbedo;\nlayout(location = 2) out vec4 outNormal;\nlayout(location = 3) out vec4 outMoment;\n#endif\n\nuint g_rng;\nuint pcgNext() {\n	g_rng = g_rng * 747796405u + 2891336453u;\n	uint w = ((g_rng >> ((g_rng >> 28u) + 4u)) ^ g_rng) * 277803737u;\n	return (w >> 22u) ^ w;\n}\nfloat rnd() { return float(pcgNext()) * (1.0 / 4294967296.0); }\nvec2 rnd2() { return vec2(rnd(), rnd()); }\n\nvec4 fetchAt(sampler2D s, int idx, int w) {\n	return texelFetch(s, ivec2(idx - (idx / w) * w, idx / w), 0);\n}\nvec4 fTri(int i) { return fetchAt(uTriPos, i, uTriPosW); }\nvec4 fAttr(int i) { return fetchAt(uTriAttr, i, uTriAttrW); }\nvec4 fBVH(int i) { return fetchAt(uBVH, i, uBVHW); }\nvec4 fMat(int i) { return fetchAt(uMat, i, uMatW); }\nint triCullMode(int tri) { return int(fTri(tri * 3 + 1).w + 0.5); }\nbool isNegativeCubeTri(int tri) { return triCullMode(tri) >= 3; }\nbool isInsideOnlyTri(int tri) {\n	return triCullMode(tri) == 6;\n}\n\nstruct Mat {\n	vec3 tint;\n	int flags;\n	vec4 rect;\n	float rough, metal, emis, ior;\n	float transm, cutoff, nscale;\n	int amode;\n	vec3 emisColor;\n};\n\nMat loadMat(int id) {\n	vec4 m0 = fMat(id * 5 + 0);\n	vec4 m1 = fMat(id * 5 + 1);\n	vec4 m2 = fMat(id * 5 + 2);\n	vec4 m3 = fMat(id * 5 + 3);\n	vec4 m4 = fMat(id * 5 + 4);\n	Mat m;\n	m.tint = m0.rgb;\n	m.flags = int(m0.a + 0.5);\n	m.rect = m1;\n	m.rough = m2.x; m.metal = m2.y; m.emis = m2.z; m.ior = m2.w;\n	m.transm = m3.x; m.cutoff = m3.y; m.nscale = m3.z;\n	m.amode = int(m3.w + 0.5);\n	m.emisColor = m4.rgb;\n	return m;\n}\n\nvec3 srgbToLin(vec3 c) {\n	return mix(c / 12.92, pow(max(c + 0.055, vec3(0.0)) / 1.055, vec3(2.4)), step(vec3(0.04045), c));\n}\n\nvec4 fetchAtlas(sampler2D atlas, vec4 rect, vec2 f, bool rep) {\n	vec2 sz = max(rect.zw, vec2(1.0));\n	if (rep) f = mod(f, sz);\n	f = clamp(f, vec2(0.0), sz - 1.0);\n	return texelFetch(atlas, ivec2(rect.xy + f), 0);\n}\n\nvec4 sampleAtlas(sampler2D atlas, vec4 rect, vec2 uvIn, bool rep) {\n	vec2 uv = vec2(uvIn.x, 1.0 - uvIn.y);\n	vec2 sz = max(rect.zw, vec2(1.0));\n	if (uFilterLinear == 0) {\n		return fetchAtlas(atlas, rect, floor(uv * sz), rep);\n	}\n	vec2 t = uv * sz - 0.5;\n	vec2 f0 = floor(t);\n	vec2 fr = t - f0;\n	vec4 c00 = fetchAtlas(atlas, rect, f0, rep);\n	vec4 c10 = fetchAtlas(atlas, rect, f0 + vec2(1.0, 0.0), rep);\n	vec4 c01 = fetchAtlas(atlas, rect, f0 + vec2(0.0, 1.0), rep);\n	vec4 c11 = fetchAtlas(atlas, rect, f0 + vec2(1.0, 1.0), rep);\n	return mix(mix(c00, c10, fr.x), mix(c01, c11, fr.x), fr.y);\n}\n\nstruct Hit {\n	float t;\n	int tri;\n	vec2 bc;\n};\n\nbool hitAABB(vec3 bmin, vec3 bmax, vec3 ro, vec3 invD, float tmax) {\n	vec3 t0 = (bmin - ro) * invD;\n	vec3 t1 = (bmax - ro) * invD;\n	vec3 ts = min(t0, t1);\n	vec3 tb = max(t0, t1);\n	float tn = max(max(ts.x, ts.y), max(ts.z, 0.0));\n	float tf = min(min(tb.x, tb.y), min(tb.z, tmax));\n	return tn <= tf;\n}\n\nvoid triIntersect(int i, vec3 ro, vec3 rd, inout Hit hit) {\n	vec3 v0 = fTri(i * 3 + 0).xyz;\n	vec4 p1 = fTri(i * 3 + 1);\n	vec3 v1 = p1.xyz;\n	vec3 v2 = fTri(i * 3 + 2).xyz;\n	vec3 e1 = v1 - v0;\n	vec3 e2 = v2 - v0;\n	vec3 pv = cross(rd, e2);\n	float det = dot(e1, pv);\n	int cull = int(p1.w + 0.5);\n	if (cull >= 6) cull = 0;\n	else if (cull >= 3) cull -= 3;\n	if (cull == 1 && det <= 0.0) return;\n	if (cull == 2 && det >= 0.0) return;\n	if (abs(det) < 1e-12) return;\n	float inv = 1.0 / det;\n	vec3 tv = ro - v0;\n	float u = dot(tv, pv) * inv;\n	if (u < 0.0 || u > 1.0) return;\n	vec3 qv = cross(tv, e1);\n	float v = dot(rd, qv) * inv;\n	if (v < 0.0 || u + v > 1.0) return;\n	float t = dot(e2, qv) * inv;\n	if (t > 1e-4 && t < hit.t) {\n		hit.t = t; hit.tri = i; hit.bc = vec2(u, v);\n	}\n}\n\nvec3 safeInvDir(vec3 d) {\n	const float e = 1e-9;\n	vec3 s = vec3(d.x < 0.0 ? -e : e, d.y < 0.0 ? -e : e, d.z < 0.0 ? -e : e);\n	vec3 dd = vec3(abs(d.x) < e ? s.x : d.x, abs(d.y) < e ? s.y : d.y, abs(d.z) < e ? s.z : d.z);\n	return 1.0 / dd;\n}\n\nvoid intersectBVH(vec3 ro, vec3 rd, inout Hit hit) {\n	if (uTriCount == 0) return;\n	vec3 invD = safeInvDir(rd);\n	int stack[32];\n	int sp = 0;\n	stack[sp++] = 0;\n	for (int guard = 0; guard < 4096; guard++) {\n		if (sp <= 0) break;\n		int node = stack[--sp];\n		vec4 a = fBVH(node * 2);\n		vec4 b = fBVH(node * 2 + 1);\n		if (!hitAABB(a.xyz, b.xyz, ro, invD, hit.t)) continue;\n		int count = int(b.w + 0.5);\n		if (count > 0) {\n			int start = int(a.w + 0.5);\n			for (int i = 0; i < count; i++) triIntersect(start + i, ro, rd, hit);\n		} else if (sp <= 30) {\n			int left = int(a.w + 0.5);\n			stack[sp++] = left + 1;\n			stack[sp++] = left;\n		}\n	}\n}\n\nvoid intersectGround(vec3 ro, vec3 rd, inout Hit hit) {\n	if (uGroundOn == 0) return;\n	if (abs(rd.y) < 1e-7) return;\n	float t = (uGroundY - ro.y) / rd.y;\n	if (t <= 1e-4 || t >= hit.t) return;\n	vec3 p = ro + rd * t;\n	if (uGroundRadius > 0.0 && dot(p.xz, p.xz) > uGroundRadius * uGroundRadius) return;\n	hit.t = t; hit.tri = -2; hit.bc = vec2(0.0);\n}\n\nvoid intersectScene(vec3 ro, vec3 rd, inout Hit hit) {\n	intersectGround(ro, rd, hit);\n	intersectBVH(ro, rd, hit);\n}\n\nstruct Surface {\n	vec3 pos, ng, ns;\n	vec2 uv;\n	vec3 albedo;\n	float alpha, rough, metal, transm, ior, cutoff;\n	int amode;\n	vec3 emission;\n	bool isLight;\n};\n\nvoid triVerts(int i, out vec3 v0, out vec3 v1, out vec3 v2) {\n	v0 = fTri(i * 3 + 0).xyz;\n	v1 = fTri(i * 3 + 1).xyz;\n	v2 = fTri(i * 3 + 2).xyz;\n}\n\nvec2 triUV(int i, vec2 bc) {\n	vec4 a0 = fAttr(i * 4 + 0);\n	vec4 a1 = fAttr(i * 4 + 1);\n	vec4 a2 = fAttr(i * 4 + 2);\n	vec4 a3 = fAttr(i * 4 + 3);\n	vec2 uv0 = vec2(a0.w, a1.w);\n	vec2 uv1 = vec2(a2.w, a3.x);\n	vec2 uv2 = vec2(a3.y, a3.z);\n	float w = 1.0 - bc.x - bc.y;\n	return uv0 * w + uv1 * bc.x + uv2 * bc.y;\n}\n\nbool insideOnlyHitFromOutside(int i, vec2 bc, vec3 rd) {\n	vec3 n0 = fAttr(i * 4 + 0).xyz;\n	vec3 n1 = fAttr(i * 4 + 1).xyz;\n	vec3 n2 = fAttr(i * 4 + 2).xyz;\n	vec3 outward = normalize(n0 * (1.0 - bc.x - bc.y) + n1 * bc.x + n2 * bc.y);\n	return dot(rd, outward) < 0.0;\n}\n\nMat matOfTri(int i) {\n	return loadMat(int(fTri(i * 3 + 0).w + 0.5));\n}\n\nfloat alphaOfTri(int i, vec2 bc, Mat m) {\n	if ((m.flags & MF_HAS_COLOR) == 0) return 1.0;\n	vec2 uv = triUV(i, bc);\n	bool rep = (m.flags & MF_WRAP_REPEAT) != 0;\n	return sampleAtlas(uAtlasC, m.rect, uv, rep).a;\n}\n\nbool alphaPassThrough(Mat m, float alpha) {\n	if (m.amode == 0) return false;\n	if (m.amode == 1) return alpha < m.cutoff;\n	return rnd() >= alpha;\n}\n\nvec3 triEmission(int i, vec2 bc) {\n	int matId = int(fTri(i * 3 + 0).w + 0.5);\n	Mat m = loadMat(matId);\n	vec2 uv = triUV(i, bc);\n	bool rep = (m.flags & MF_WRAP_REPEAT) != 0;\n	vec3 base = m.tint;\n	if ((m.flags & MF_HAS_COLOR) != 0) base *= srgbToLin(sampleAtlas(uAtlasC, m.rect, uv, rep).rgb);\n	if ((m.flags & MF_HAS_MER) != 0) {\n		float e = sampleAtlas(uAtlasM, m.rect, uv, rep).g;\n		return base * e * m.emis;\n	}\n	if ((m.flags & MF_HAS_EMISSIVE_MAP) != 0) {\n		vec3 emsCol = srgbToLin(sampleAtlas(uAtlasE, m.rect, uv, rep).rgb);\n		float mask = dot(emsCol, vec3(0.2126, 0.7152, 0.0722));\n		if ((m.flags & MF_EMIS_CUSTOM_COLOR) != 0) return m.emisColor * mask * m.emis;\n		if ((m.flags & MF_EMIS_MAIN_COLOR) != 0) return base * mask * m.emis;\n		return emsCol * m.emis;\n	}\n	if ((m.flags & MF_FULLBRIGHT) != 0) return base * m.emis;\n	return vec3(0.0);\n}\n\nvoid onb(vec3 n, out vec3 t, out vec3 b) {\n	float s = n.z >= 0.0 ? 1.0 : -1.0;\n	float a = -1.0 / (s + n.z);\n	float bb = n.x * n.y * a;\n	t = vec3(1.0 + s * n.x * n.x * a, s * bb, -s * n.x);\n	b = vec3(bb, s + n.y * n.y * a, -n.y);\n}\n\nSurface getSurface(Hit hit, vec3 ro, vec3 rd) {\n	Surface s;\n	s.pos = ro + rd * hit.t;\n	s.isLight = false;\n	s.transm = 0.0;\n	s.ior = 1.5;\n	s.cutoff = 0.0;\n	s.alpha = 1.0;\n	s.amode = 0;\n	s.emission = vec3(0.0);\n\n	if (hit.tri == -2) {\n		s.ng = vec3(0.0, 1.0, 0.0);\n		s.ns = s.ng;\n		s.uv = vec2(0.0);\n		s.albedo = uGroundColor;\n		s.rough = uGroundRough;\n		s.metal = uGroundMetal;\n		if (rd.y > 0.0) { s.ng = -s.ng; s.ns = -s.ns; }\n		return s;\n	}\n\n	int i = hit.tri;\n	vec3 v0, v1, v2;\n	triVerts(i, v0, v1, v2);\n	vec3 geoN = normalize(cross(v1 - v0, v2 - v0));\n\n	vec4 a0 = fAttr(i * 4 + 0);\n	vec4 a1 = fAttr(i * 4 + 1);\n	vec4 a2 = fAttr(i * 4 + 2);\n	vec4 a3 = fAttr(i * 4 + 3);\n	float w = 1.0 - hit.bc.x - hit.bc.y;\n	vec3 sn = a0.xyz * w + a1.xyz * hit.bc.x + a2.xyz * hit.bc.y;\n	if (dot(sn, sn) < 1e-12) sn = geoN; else sn = normalize(sn);\n	if (dot(sn, geoN) < 0.0) geoN = -geoN;\n\n	vec2 uv0 = vec2(a0.w, a1.w);\n	vec2 uv1 = vec2(a2.w, a3.x);\n	vec2 uv2 = vec2(a3.y, a3.z);\n	s.uv = uv0 * w + uv1 * hit.bc.x + uv2 * hit.bc.y;\n	s.isLight = a3.w > 0.5;\n\n	if (dot(geoN, rd) > 0.0) { geoN = -geoN; sn = -sn; }\n	s.ng = geoN;\n	s.ns = sn;\n\n	int matId = int(fTri(i * 3 + 0).w + 0.5);\n	Mat m = loadMat(matId);\n	bool rep = (m.flags & MF_WRAP_REPEAT) != 0;\n\n	vec3 base = m.tint;\n	float alpha = 1.0;\n	if ((m.flags & MF_HAS_COLOR) != 0) {\n		vec4 c = sampleAtlas(uAtlasC, m.rect, s.uv, rep);\n		base *= srgbToLin(c.rgb);\n		alpha = c.a;\n	}\n	s.albedo = base;\n	s.alpha = alpha;\n	s.cutoff = m.cutoff;\n	s.amode = m.amode;\n	s.rough = clamp(m.rough, 0.015, 1.0);\n	s.metal = clamp(m.metal, 0.0, 1.0);\n	s.transm = clamp(m.transm, 0.0, 1.0);\n	s.ior = max(m.ior, 1.001);\n\n	if ((m.flags & MF_HAS_MER) != 0) {\n		vec3 mer = sampleAtlas(uAtlasM, m.rect, s.uv, rep).rgb;\n		s.metal = clamp(mer.r, 0.0, 1.0);\n		s.rough = clamp(mer.b, 0.015, 1.0);\n		s.emission = base * mer.g * m.emis;\n	} else if ((m.flags & MF_HAS_EMISSIVE_MAP) != 0) {\n		vec3 emsCol = srgbToLin(sampleAtlas(uAtlasE, m.rect, s.uv, rep).rgb);\n		float mask = dot(emsCol, vec3(0.2126, 0.7152, 0.0722));\n		if ((m.flags & MF_EMIS_CUSTOM_COLOR) != 0) {\n			s.emission = m.emisColor * mask * m.emis;\n		} else if ((m.flags & MF_EMIS_MAIN_COLOR) != 0) {\n			s.emission = base * mask * m.emis;\n		} else {\n			s.emission = emsCol * m.emis;\n		}\n	} else if ((m.flags & MF_FULLBRIGHT) != 0) {\n		s.emission = base * m.emis;\n	}\n\n	if ((m.flags & MF_HAS_NORMAL) != 0 && m.nscale > 0.0) {\n		vec2 d1 = uv1 - uv0;\n		vec2 d2 = uv2 - uv0;\n		float r = d1.x * d2.y - d2.x * d1.y;\n		if (abs(r) > 1e-9) {\n			vec3 e1 = v1 - v0;\n			vec3 e2 = v2 - v0;\n			vec3 T = (e1 * d2.y - e2 * d1.y) / r;\n			T = normalize(T - s.ns * dot(s.ns, T));\n			if (dot(T, T) > 0.5) {\n				vec3 B = cross(s.ns, T);\n				vec3 nt = sampleAtlas(uAtlasN, m.rect, s.uv, rep).rgb * 2.0 - 1.0;\n				nt.xy *= m.nscale;\n				vec3 mapped = normalize(T * nt.x + B * nt.y + s.ns * max(nt.z, 0.05));\n				if (dot(mapped, s.ng) > 0.0) s.ns = mapped;\n			}\n		}\n	}\n	return s;\n}\n\nvec2 dirToEnvUV(vec3 d) {\n	float phi = atan(d.z, d.x) + uEnvRotation;\n	float u = fract(phi * 0.15915494309189535 + 0.5);\n	float v = acos(clamp(d.y, -1.0, 1.0)) * INV_PI;\n	return vec2(u, clamp(v, 0.0, 1.0));\n}\n\nvec3 envRadiance(vec3 d) {\n	return texture(uEnv, dirToEnvUV(d)).rgb * uEnvIntensity;\n}\n\nfloat envPdfDir(vec3 d) {\n	int W = uEnvDist.x, H = uEnvDist.y;\n	vec2 uv = dirToEnvUV(d);\n	int x = clamp(int(uv.x * float(W)), 0, W - 1);\n	int y = clamp(int(uv.y * float(H)), 0, H - 1);\n	float pm = (texelFetch(uEnvMarg, ivec2(y + 1, 0), 0).r - texelFetch(uEnvMarg, ivec2(y, 0), 0).r) * float(H);\n	float pc = (texelFetch(uEnvCond, ivec2(x + 1, y), 0).r - texelFetch(uEnvCond, ivec2(x, y), 0).r) * float(W);\n	float sinT = sqrt(max(0.0, 1.0 - d.y * d.y));\n	if (sinT < 1e-5) return 0.0;\n	return (pm * pc) / (2.0 * PI * PI * sinT);\n}\n\nvec3 envSampleDir(out vec3 L, out float pdf) {\n	int W = uEnvDist.x, H = uEnvDist.y;\n	float r1 = rnd(), r2 = rnd();\n	int lo = 0, hi = H;\n	for (int i = 0; i < 12; i++) {\n		if (lo + 1 >= hi) break;\n		int mid = (lo + hi) >> 1;\n		if (texelFetch(uEnvMarg, ivec2(mid, 0), 0).r <= r1) lo = mid; else hi = mid;\n	}\n	int y = lo;\n	float m0 = texelFetch(uEnvMarg, ivec2(y, 0), 0).r;\n	float m1 = texelFetch(uEnvMarg, ivec2(y + 1, 0), 0).r;\n	float dy = (m1 > m0) ? (r1 - m0) / (m1 - m0) : 0.5;\n\n	lo = 0; hi = W;\n	for (int i = 0; i < 12; i++) {\n		if (lo + 1 >= hi) break;\n		int mid = (lo + hi) >> 1;\n		if (texelFetch(uEnvCond, ivec2(mid, y), 0).r <= r2) lo = mid; else hi = mid;\n	}\n	int x = lo;\n	float c0 = texelFetch(uEnvCond, ivec2(x, y), 0).r;\n	float c1 = texelFetch(uEnvCond, ivec2(x + 1, y), 0).r;\n	float dx = (c1 > c0) ? (r2 - c0) / (c1 - c0) : 0.5;\n\n	float u = (float(x) + dx) / float(W);\n	float v = (float(y) + dy) / float(H);\n	float theta = v * PI;\n	float phi = (u - 0.5) * 2.0 * PI - uEnvRotation;\n	float sinT = sin(theta);\n	L = vec3(sinT * cos(phi), cos(theta), sinT * sin(phi));\n	float pm = (m1 - m0) * float(H);\n	float pc = (c1 - c0) * float(W);\n	pdf = (sinT > 1e-5) ? (pm * pc) / (2.0 * PI * PI * sinT) : 0.0;\n	return envRadiance(L);\n}\n\nvec3 sunRadianceFor(vec3 d) {\n	if (uSunEnable == 0) return vec3(0.0);\n	return dot(d, uSunDir) >= uSunCosRadius ? uSunRadiance : vec3(0.0);\n}\nfloat sunPdfFor(vec3 d) {\n	if (uSunEnable == 0) return 0.0;\n	return dot(d, uSunDir) >= uSunCosRadius ? (1.0 / uSunSolidAngle) : 0.0;\n}\nvec3 sunSampleDir(out float pdf) {\n	float cosT = mix(uSunCosRadius, 1.0, rnd());\n	float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));\n	float phi = 2.0 * PI * rnd();\n	vec3 t, b;\n	onb(uSunDir, t, b);\n	pdf = 1.0 / uSunSolidAngle;\n	return normalize(t * (sinT * cos(phi)) + b * (sinT * sin(phi)) + uSunDir * cosT);\n}\n\nfloat luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }\nfloat powerHeuristic(float a, float b) {\n	float aa = a * a, bb = b * b;\n	return aa / max(aa + bb, 1e-9);\n}\nfloat specProb(vec3 albedo, float metal) {\n	float ds = luma(albedo) * (1.0 - metal);\n	float ss = luma(mix(vec3(0.04), albedo, metal)) + metal * 0.5;\n	return clamp(ss / max(ds + ss, 1e-4), 0.12, 0.9);\n}\nfloat distGGX(float NoH, float a) {\n	float a2 = a * a;\n	float d = NoH * NoH * (a2 - 1.0) + 1.0;\n	return a2 / max(PI * d * d, 1e-9);\n}\nfloat smithG(float NoV, float NoL, float a) {\n	float a2 = a * a;\n	float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);\n	float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);\n	return 0.5 / max(gv + gl, 1e-9);\n}\n\nvec3 bsdfEval(vec3 N, vec3 V, vec3 L, vec3 albedo, float rough, float metal, out float pdf) {\n	pdf = 0.0;\n	float NoL = dot(N, L);\n	float NoV = dot(N, V);\n	if (NoL <= 0.0 || NoV <= 0.0) return vec3(0.0);\n	vec3 H = normalize(V + L);\n	float NoH = max(dot(N, H), 0.0);\n	float VoH = max(dot(V, H), 1e-5);\n	float a = max(rough * rough, 1e-4);\n	vec3 f0 = mix(vec3(0.04), albedo, metal);\n	vec3 F = f0 + (1.0 - f0) * pow(clamp(1.0 - VoH, 0.0, 1.0), 5.0);\n	float D = distGGX(NoH, a);\n	float Vis = smithG(NoV, NoL, a);\n	vec3 spec = F * D * Vis;\n	vec3 diff = albedo * (1.0 - metal) * INV_PI;\n	float ps = specProb(albedo, metal);\n	float pdfS = D * NoH / (4.0 * VoH);\n	float pdfD = NoL * INV_PI;\n	pdf = mix(pdfD, pdfS, ps);\n	return (diff + spec) * NoL;\n}\n\nvec3 cosineSample(vec3 n, vec2 u) {\n	float r = sqrt(u.x);\n	float phi = 2.0 * PI * u.y;\n	vec3 t, b;\n	onb(n, t, b);\n	return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));\n}\n\nvec3 ggxSampleH(vec3 n, float a, vec2 u) {\n	float phi = 2.0 * PI * u.x;\n	float cosT = sqrt(max(0.0, (1.0 - u.y) / (1.0 + (a * a - 1.0) * u.y)));\n	float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));\n	vec3 t, b;\n	onb(n, t, b);\n	return normalize(t * (sinT * cos(phi)) + b * (sinT * sin(phi)) + n * cosT);\n}\n\nbool bsdfSample(vec3 N, vec3 V, vec3 albedo, float rough, float metal, out vec3 L, out vec3 weight, out float pdf) {\n	float ps = specProb(albedo, metal);\n	float a = max(rough * rough, 1e-4);\n	if (rnd() < ps) {\n		vec3 H = ggxSampleH(N, a, rnd2());\n		L = reflect(-V, H);\n	} else {\n		L = cosineSample(N, rnd2());\n	}\n	if (dot(N, L) <= 0.0) return false;\n	vec3 f = bsdfEval(N, V, L, albedo, rough, metal, pdf);\n	if (pdf <= 1e-8) return false;\n	weight = f / pdf;\n	return true;\n}\n\nfloat fresnelDielectric(float cosI, float eta) {\n	float s2 = eta * eta * (1.0 - cosI * cosI);\n	if (s2 > 1.0) return 1.0;\n	float cosT = sqrt(max(0.0, 1.0 - s2));\n	float rs = (eta * cosI - cosT) / (eta * cosI + cosT);\n	float rp = (cosI - eta * cosT) / (cosI + eta * cosT);\n	return 0.5 * (rs * rs + rp * rp);\n}\n\nbool anyHitBVH(vec3 ro, vec3 rd, float maxT) {\n	if (uTriCount == 0) return false;\n	vec3 invD = safeInvDir(rd);\n	int stack[32];\n	int sp = 0;\n	stack[sp++] = 0;\n	for (int guard = 0; guard < 4096; guard++) {\n		if (sp <= 0) break;\n		int node = stack[--sp];\n		vec4 a = fBVH(node * 2);\n		vec4 b = fBVH(node * 2 + 1);\n		if (!hitAABB(a.xyz, b.xyz, ro, invD, maxT)) continue;\n		int count = int(b.w + 0.5);\n		if (count > 0) {\n			int start = int(a.w + 0.5);\n			for (int i = 0; i < count; i++) {\n				Hit h;\n				h.t = maxT;\n				h.tri = -1;\n				h.bc = vec2(0.0);\n				triIntersect(start + i, ro, rd, h);\n				if (h.tri >= 0) {\n					if (isNegativeCubeTri(h.tri)) continue;\n					Mat hm = matOfTri(h.tri);\n					if (hm.amode == 0 || !alphaPassThrough(hm, alphaOfTri(h.tri, h.bc, hm))) return true;\n				}\n			}\n		} else if (sp <= 30) {\n			int left = int(a.w + 0.5);\n			stack[sp++] = left + 1;\n			stack[sp++] = left;\n		}\n	}\n	return false;\n}\n\nbool occluded(vec3 ro, vec3 rd, float maxT, bool skipGround) {\n	if (!skipGround && uGroundOn == 1) {\n		Hit gh;\n		gh.t = maxT;\n		gh.tri = -1;\n		gh.bc = vec2(0.0);\n		intersectGround(ro, rd, gh);\n		if (gh.tri == -2) return true;\n	}\n	return anyHitBVH(ro, rd, maxT);\n}\n\nstruct LightSample { vec3 dir; vec3 radiance; float pdf; float dist; };\n\nLightSample sampleTriLight(vec3 p) {\n	LightSample ls;\n	ls.dir = vec3(0.0, 1.0, 0.0);\n	ls.radiance = vec3(0.0);\n	ls.pdf = 0.0;\n	ls.dist = 0.0;\n	if (uLightCount == 0) return ls;\n\n	int li = min(int(rnd() * float(uLightCount)), uLightCount - 1);\n	int tri = int(texelFetch(uLightTex, ivec2(li - (li / uLightW) * uLightW, li / uLightW), 0).r + 0.5);\n	vec3 v0, v1, v2;\n	triVerts(tri, v0, v1, v2);\n	float su = sqrt(rnd());\n	float b0 = 1.0 - su;\n	float b1 = rnd() * su;\n	float b2 = max(0.0, 1.0 - b0 - b1);\n	vec3 q = v0 * b0 + v1 * b1 + v2 * b2;\n	vec3 cr = cross(v1 - v0, v2 - v0);\n	float area2 = length(cr);\n	if (area2 < 1e-9) return ls;\n	vec3 nl = cr / area2;\n	float area = 0.5 * area2;\n\n	vec3 dv = q - p;\n	float d2 = dot(dv, dv);\n	if (d2 < 1e-8) return ls;\n	float d = sqrt(d2);\n	ls.dir = dv / d;\n	ls.dist = d;\n	float cosL = abs(dot(nl, ls.dir));\n	if (cosL < 1e-5) return ls;\n	ls.pdf = d2 / (cosL * area * float(uLightCount));\n	ls.radiance = triEmission(tri, vec2(b1, b2));\n	return ls;\n}\n\nfloat triLightPdf(int tri, vec3 from, vec3 hitP) {\n	if (uLightCount == 0) return 0.0;\n	vec3 v0, v1, v2;\n	triVerts(tri, v0, v1, v2);\n	vec3 cr = cross(v1 - v0, v2 - v0);\n	float area2 = length(cr);\n	if (area2 < 1e-9) return 0.0;\n	vec3 nl = cr / area2;\n	vec3 dv = hitP - from;\n	float d2 = dot(dv, dv);\n	float d = sqrt(max(d2, 1e-12));\n	float cosL = abs(dot(nl, dv / d));\n	if (cosL < 1e-5) return 0.0;\n	return d2 / (cosL * 0.5 * area2 * float(uLightCount));\n}\n\nfloat shadowCatcherAlpha(vec3 p, vec3 n) {\n	float full = 0.0, vis = 0.0;\n	if (uSunEnable == 1) {\n		float pdf;\n		vec3 L = sunSampleDir(pdf);\n		float ndl = max(dot(n, L), 0.0);\n		if (ndl > 0.0 && pdf > 0.0) {\n			float c = luma(uSunRadiance) * ndl / pdf;\n			full += c;\n			if (!occluded(p + n * RAY_EPS, L, TFAR, true)) vis += c;\n		}\n	}\n	{\n		vec3 L;\n		float pdf;\n		vec3 Le = envSampleDir(L, pdf);\n		float ndl = max(dot(n, L), 0.0);\n		if (ndl > 0.0 && pdf > 1e-8) {\n			float c = luma(Le) * ndl / pdf;\n			full += c;\n			if (!occluded(p + n * RAY_EPS, L, TFAR, true)) vis += c;\n		}\n	}\n	if (full <= 1e-8) return 0.0;\n	return clamp(1.0 - vis / full, 0.0, 1.0);\n}\n\nvec3 tracePath(vec3 ro, vec3 rd, out float alphaOut, out vec3 gAlbedo, out vec3 gNormal, out float gDepth) {\n	vec3 radiance = vec3(0.0);\n	vec3 beta = vec3(1.0);\n	float lastPdf = 0.0;\n	bool specularPath = true;\n	alphaOut = 1.0;\n	gAlbedo = vec3(0.0);\n	gNormal = vec3(0.0);\n	gDepth = 1.0e6;\n	bool gWritten = false;\n	int bounce = 0;\n	vec3 prevPos = ro;\n\n	for (int iter = 0; iter < 96; iter++) {\n		Hit hit;\n		hit.t = TFAR;\n		hit.tri = -1;\n		hit.bc = vec2(0.0);\n		intersectScene(ro, rd, hit);\n		if (hit.tri >= 0 && isNegativeCubeTri(hit.tri)) {\n			if (bounce > 0 || (isInsideOnlyTri(hit.tri) && insideOnlyHitFromOutside(hit.tri, hit.bc, rd))) {\n				ro += rd * (hit.t + RAY_EPS);\n				continue;\n			}\n		}\n\n		if (hit.tri == -1) {\n			vec3 env = envRadiance(rd);\n			vec3 sun = sunRadianceFor(rd);\n			if (bounce == 0) {\n				if (uBgMode == 1) { radiance += uBgColor; gAlbedo = uBgColor; }\n				else if (uBgMode == 2) { alphaOut = 0.0; gAlbedo = vec3(0.0); }\n				else { radiance += env + sun; gAlbedo = env; }\n				gNormal = -rd;\n			} else {\n				float we = specularPath ? 1.0 : powerHeuristic(lastPdf, envPdfDir(rd));\n				float ws = specularPath ? 1.0 : powerHeuristic(lastPdf, sunPdfFor(rd));\n				radiance += beta * (env * we + sun * ws);\n			}\n			break;\n		}\n\n		Surface s = getSurface(hit, ro, rd);\n\n		bool passThrough = false;\n		if (s.amode == 1) passThrough = s.alpha < s.cutoff;\n		else if (s.amode == 2) passThrough = rnd() >= s.alpha;\n		if (passThrough) {\n			ro = s.pos + rd * RAY_EPS;\n			continue;\n		}\n\n		if (bounce == 0 && hit.tri == -2 && uGroundCatcher == 1) {\n			alphaOut = shadowCatcherAlpha(s.pos, s.ng);\n			gAlbedo = vec3(0.0);\n			gNormal = s.ng;\n			gDepth = hit.t;\n			break;\n		}\n\n		if (!gWritten) {\n			gAlbedo = s.albedo;\n			gNormal = s.ns;\n			gDepth = hit.t;\n			gWritten = true;\n		}\n\n		if (dot(s.emission, s.emission) > 0.0) {\n			float w = 1.0;\n			if (!specularPath && s.isLight) {\n				w = powerHeuristic(lastPdf, triLightPdf(hit.tri, prevPos, s.pos));\n			}\n			radiance += beta * s.emission * w;\n		}\n\n		if (bounce >= uMaxBounce) break;\n\n		vec3 V = -rd;\n\n		if (s.transm > 0.0 && rnd() < s.transm) {\n			bool entering = dot(rd, s.ng) < 0.0;\n			vec3 n = s.ng;\n			float eta = entering ? (1.0 / s.ior) : s.ior;\n			float cosI = clamp(dot(-rd, n), 0.0, 1.0);\n			float F = fresnelDielectric(cosI, eta);\n			vec3 newDir;\n			if (rnd() < F) {\n				newDir = reflect(rd, n);\n			} else {\n				newDir = refract(rd, n, eta);\n				if (dot(newDir, newDir) < 1e-8) newDir = reflect(rd, n);\n				else beta *= s.albedo;\n			}\n			ro = s.pos + newDir * RAY_EPS;\n			rd = normalize(newDir);\n			specularPath = true;\n			bounce++;\n			continue;\n		}\n\n		vec3 shadeOrigin = s.pos + s.ng * RAY_EPS;\n\n		int nLS = max(uLightSamples, 1);\n		float invLS = 1.0 / float(nLS);\n		for (int ls_i = 0; ls_i < nLS; ls_i++) {\n			vec3 L;\n			float pdfL;\n			vec3 Le = envSampleDir(L, pdfL);\n			if (pdfL > 1e-8 && dot(L, s.ns) > 0.0 && dot(L, s.ng) > 0.0 && dot(Le, Le) > 0.0) {\n				float pdfB;\n				vec3 f = bsdfEval(s.ns, V, L, s.albedo, s.rough, s.metal, pdfB);\n				if (dot(f, f) > 0.0 && !occluded(shadeOrigin, L, TFAR, false)) {\n					radiance += beta * f * Le * powerHeuristic(pdfL, pdfB) / pdfL * invLS;\n				}\n			}\n		}\n\n		if (uSunEnable == 1) {\n			for (int ls_i = 0; ls_i < nLS; ls_i++) {\n				float pdfL;\n				vec3 L = sunSampleDir(pdfL);\n				if (pdfL > 0.0 && dot(L, s.ns) > 0.0 && dot(L, s.ng) > 0.0) {\n					float pdfB;\n					vec3 f = bsdfEval(s.ns, V, L, s.albedo, s.rough, s.metal, pdfB);\n					if (dot(f, f) > 0.0 && !occluded(shadeOrigin, L, TFAR, false)) {\n						radiance += beta * f * uSunRadiance * powerHeuristic(pdfL, pdfB) / pdfL * invLS;\n					}\n				}\n			}\n		}\n\n		if (uLightCount > 0) {\n			for (int ls_i = 0; ls_i < nLS; ls_i++) {\n				LightSample ls = sampleTriLight(s.pos);\n				if (ls.pdf > 1e-8 && dot(ls.dir, s.ns) > 0.0 && dot(ls.dir, s.ng) > 0.0 && dot(ls.radiance, ls.radiance) > 0.0) {\n					float pdfB;\n					vec3 f = bsdfEval(s.ns, V, ls.dir, s.albedo, s.rough, s.metal, pdfB);\n					if (dot(f, f) > 0.0 && !occluded(shadeOrigin, ls.dir, ls.dist - RAY_EPS * 2.0, false)) {\n						radiance += beta * f * ls.radiance * powerHeuristic(ls.pdf, pdfB) / ls.pdf * invLS;\n					}\n				}\n			}\n		}\n\n		vec3 L, weight;\n		float pdfB;\n		if (!bsdfSample(s.ns, V, s.albedo, s.rough, s.metal, L, weight, pdfB)) break;\n		if (dot(L, s.ng) <= 0.0) break;\n\n		beta *= weight;\n		lastPdf = pdfB;\n		specularPath = false;\n		prevPos = s.pos;\n		ro = shadeOrigin;\n		rd = L;\n		bounce++;\n\n		if (bounce > 2) {\n			float q = clamp(max(beta.r, max(beta.g, beta.b)), 0.02, 0.95);\n			if (rnd() > q) break;\n			beta /= q;\n		}\n		if (dot(beta, beta) < 1e-12) break;\n	}\n\n	if (uClamp > 0.0) {\n		float m = max(radiance.r, max(radiance.g, radiance.b));\n		if (m > uClamp) radiance *= uClamp / m;\n	}\n	if (any(isnan(radiance)) || any(isinf(radiance))) radiance = vec3(0.0);\n	return radiance;\n}\n\nvoid main() {\n	ivec2 px = ivec2(gl_FragCoord.xy);\n	g_rng = uint(px.x) * 1973u + uint(px.y) * 9277u + uint(uSeed) * 26699u;\n	g_rng = g_rng | 1u;\n	pcgNext();\n	pcgNext();\n\n	vec2 jitter = rnd2();\n	vec2 ndc = ((gl_FragCoord.xy - 0.5 + jitter) / uResolution) * 2.0 - 1.0;\n\n	vec3 ro, rd;\n	if (uOrtho == 1) {\n		ro = uCamPos + uCamRight * (ndc.x * uOrthoHalfHeight * uAspect) + uCamUp * (ndc.y * uOrthoHalfHeight);\n		rd = normalize(uCamForward);\n	} else {\n		rd = normalize(uCamForward + uCamRight * (ndc.x * uTanHalfFov * uAspect) + uCamUp * (ndc.y * uTanHalfFov));\n		ro = uCamPos;\n		if (uAperture > 0.0 && uFocusDist > 0.0) {\n			vec3 focal = ro + rd * (uFocusDist / max(dot(rd, normalize(uCamForward)), 1e-4));\n			float ang = 2.0 * PI * rnd();\n			float rad = uAperture * sqrt(rnd());\n			ro += uCamRight * (cos(ang) * rad) + uCamUp * (sin(ang) * rad);\n			rd = normalize(focal - ro);\n		}\n	}\n\n	float alpha, depth;\n	vec3 alb, nrm;\n	vec3 c = tracePath(ro, rd, alpha, alb, nrm, depth);\n#ifndef PTR_COLOR_ONLY\n	vec3 demod = c / max(alb, vec3(0.02));\n	float l = dot(demod, vec3(0.2126, 0.7152, 0.0722));\n#endif\n\n	vec4 prev = vec4(0.0);\n#ifndef PTR_COLOR_ONLY\n	vec4 prevA = vec4(0.0);\n	vec4 prevN = vec4(0.0);\n	vec4 prevM = vec4(0.0);\n#endif\n	if (uReset == 0) {\n		prev = texelFetch(uAccum, px, 0);\n#ifndef PTR_COLOR_ONLY\n		prevA = texelFetch(uAccumAlb, px, 0);\n		prevN = texelFetch(uAccumNrm, px, 0);\n		prevM = texelFetch(uAccumMom, px, 0);\n#endif\n	}\n	outColor = prev + vec4(c, alpha);\n#ifndef PTR_COLOR_ONLY\n	outAlbedo = prevA + vec4(alb, 1.0);\n	outNormal = prevN + vec4(nrm, 1.0);\n	outMoment = prevM + vec4(l, l * l, depth, 1.0);\n#endif\n}\n";
+  var pathtrace_frag_default = "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\n\n#define PI 3.141592653589793\n#define INV_PI 0.3183098861837907\n#define TFAR 1.0e20\n#define RAY_EPS 1.0e-3\n\n#define MF_HAS_COLOR   1\n#define MF_HAS_MER     2\n#define MF_HAS_NORMAL  4\n#define MF_FULLBRIGHT  8\n#define MF_WRAP_REPEAT 16\n#define MF_ADDITIVE    32\n#define MF_HAS_EMISSIVE_MAP 64\n#define MF_EMIS_MAIN_COLOR  128\n#define MF_EMIS_CUSTOM_COLOR 256\n#define MF_FORCE_EMISSION 512\n#define MF_FORCE_ROUGHNESS 1024\n#define MF_FORCE_METALNESS 2048\n\nuniform vec2 uResolution;\nuniform int  uSeed;\nuniform int  uMaxBounce;\nuniform int  uLightSamples;\nuniform float uClamp;\nuniform int  uFilterLinear;\n\nuniform vec3 uCamPos, uCamRight, uCamUp, uCamForward;\nuniform float uTanHalfFov, uAspect, uOrthoHalfHeight;\nuniform int  uOrtho;\nuniform float uAperture, uFocusDist;\n\nuniform sampler2D uTriPos;\nuniform sampler2D uTriAttr;\nuniform sampler2D uBVH;\nuniform sampler2D uMat;\nuniform sampler2D uAtlasC;\nuniform sampler2D uAtlasM;\nuniform sampler2D uAtlasN;\nuniform sampler2D uAtlasE;\nuniform sampler2D uLightTex;\nuniform int uTriPosW, uTriAttrW, uBVHW, uMatW, uLightW;\nuniform int uTriCount, uLightCount;\n\nuniform sampler2D uEnv;\nuniform sampler2D uEnvCond;\nuniform sampler2D uEnvMarg;\nuniform ivec2 uEnvDist;\nuniform float uEnvIntensity, uEnvRotation;\nuniform int uBgMode;\nuniform vec3 uBgColor;\n\nuniform int  uSunEnable;\nuniform vec3 uSunDir;\nuniform float uSunCosRadius, uSunSolidAngle;\nuniform vec3 uSunRadiance;\n\nuniform int  uGroundOn, uGroundCatcher;\nuniform float uGroundY, uGroundRough, uGroundMetal, uGroundRadius;\nuniform vec3 uGroundColor;\nuniform int uGroundTexOn;\nuniform vec4 uGroundRect;\nuniform float uGroundTexScale;\n\nuniform sampler2D uAccum;\n#ifndef PTR_COLOR_ONLY\nuniform sampler2D uAccumAlb;\nuniform sampler2D uAccumNrm;\nuniform sampler2D uAccumMom;\n#endif\nuniform int uReset;\n\nlayout(location = 0) out vec4 outColor;\n#ifndef PTR_COLOR_ONLY\nlayout(location = 1) out vec4 outAlbedo;\nlayout(location = 2) out vec4 outNormal;\nlayout(location = 3) out vec4 outMoment;\n#endif\n\nuint g_rng;\nuint pcgNext() {\n	g_rng = g_rng * 747796405u + 2891336453u;\n	uint w = ((g_rng >> ((g_rng >> 28u) + 4u)) ^ g_rng) * 277803737u;\n	return (w >> 22u) ^ w;\n}\nfloat rnd() { return float(pcgNext()) * (1.0 / 4294967296.0); }\nvec2 rnd2() { return vec2(rnd(), rnd()); }\n\nvec4 fetchAt(sampler2D s, int idx, int w) {\n	return texelFetch(s, ivec2(idx - (idx / w) * w, idx / w), 0);\n}\nvec4 fTri(int i) { return fetchAt(uTriPos, i, uTriPosW); }\nvec4 fAttr(int i) { return fetchAt(uTriAttr, i, uTriAttrW); }\nvec4 fBVH(int i) { return fetchAt(uBVH, i, uBVHW); }\nvec4 fMat(int i) { return fetchAt(uMat, i, uMatW); }\nint triCullMode(int tri) { return int(fTri(tri * 3 + 1).w + 0.5); }\nbool isNegativeCubeTri(int tri) { return triCullMode(tri) >= 3; }\nbool isInsideOnlyTri(int tri) {\n	return triCullMode(tri) == 6;\n}\n\nstruct Mat {\n	vec3 tint;\n	int flags;\n	vec4 rect;\n	float rough, metal, emis, ior;\n	float transm, cutoff, nscale;\n	int amode;\n	vec3 emisColor;\n};\n\nMat loadMat(int id) {\n	vec4 m0 = fMat(id * 5 + 0);\n	vec4 m1 = fMat(id * 5 + 1);\n	vec4 m2 = fMat(id * 5 + 2);\n	vec4 m3 = fMat(id * 5 + 3);\n	vec4 m4 = fMat(id * 5 + 4);\n	Mat m;\n	m.tint = m0.rgb;\n	m.flags = int(m0.a + 0.5);\n	m.rect = m1;\n	m.rough = m2.x; m.metal = m2.y; m.emis = m2.z; m.ior = m2.w;\n	m.transm = m3.x; m.cutoff = m3.y; m.nscale = m3.z;\n	m.amode = int(m3.w + 0.5);\n	m.emisColor = m4.rgb;\n	return m;\n}\n\nvec3 srgbToLin(vec3 c) {\n	return mix(c / 12.92, pow(max(c + 0.055, vec3(0.0)) / 1.055, vec3(2.4)), step(vec3(0.04045), c));\n}\n\nvec4 fetchAtlas(sampler2D atlas, vec4 rect, vec2 f, bool rep) {\n	vec2 sz = max(rect.zw, vec2(1.0));\n	if (rep) f = mod(f, sz);\n	f = clamp(f, vec2(0.0), sz - 1.0);\n	return texelFetch(atlas, ivec2(rect.xy + f), 0);\n}\n\nvec4 sampleAtlas(sampler2D atlas, vec4 rect, vec2 uvIn, bool rep) {\n	vec2 uv = vec2(uvIn.x, 1.0 - uvIn.y);\n	vec2 sz = max(rect.zw, vec2(1.0));\n	if (uFilterLinear == 0) {\n		return fetchAtlas(atlas, rect, floor(uv * sz), rep);\n	}\n	vec2 t = uv * sz - 0.5;\n	vec2 f0 = floor(t);\n	vec2 fr = t - f0;\n	vec4 c00 = fetchAtlas(atlas, rect, f0, rep);\n	vec4 c10 = fetchAtlas(atlas, rect, f0 + vec2(1.0, 0.0), rep);\n	vec4 c01 = fetchAtlas(atlas, rect, f0 + vec2(0.0, 1.0), rep);\n	vec4 c11 = fetchAtlas(atlas, rect, f0 + vec2(1.0, 1.0), rep);\n	return mix(mix(c00, c10, fr.x), mix(c01, c11, fr.x), fr.y);\n}\n\nstruct Hit {\n	float t;\n	int tri;\n	vec2 bc;\n};\n\nbool hitAABB(vec3 bmin, vec3 bmax, vec3 ro, vec3 invD, float tmax) {\n	vec3 t0 = (bmin - ro) * invD;\n	vec3 t1 = (bmax - ro) * invD;\n	vec3 ts = min(t0, t1);\n	vec3 tb = max(t0, t1);\n	float tn = max(max(ts.x, ts.y), max(ts.z, 0.0));\n	float tf = min(min(tb.x, tb.y), min(tb.z, tmax));\n	return tn <= tf;\n}\n\nvoid triIntersect(int i, vec3 ro, vec3 rd, inout Hit hit) {\n	vec3 v0 = fTri(i * 3 + 0).xyz;\n	vec4 p1 = fTri(i * 3 + 1);\n	vec3 v1 = p1.xyz;\n	vec3 v2 = fTri(i * 3 + 2).xyz;\n	vec3 e1 = v1 - v0;\n	vec3 e2 = v2 - v0;\n	vec3 pv = cross(rd, e2);\n	float det = dot(e1, pv);\n	int cull = int(p1.w + 0.5);\n	if (cull >= 6) cull = 0;\n	else if (cull >= 3) cull -= 3;\n	if (cull == 1 && det <= 0.0) return;\n	if (cull == 2 && det >= 0.0) return;\n	if (abs(det) < 1e-12) return;\n	float inv = 1.0 / det;\n	vec3 tv = ro - v0;\n	float u = dot(tv, pv) * inv;\n	if (u < 0.0 || u > 1.0) return;\n	vec3 qv = cross(tv, e1);\n	float v = dot(rd, qv) * inv;\n	if (v < 0.0 || u + v > 1.0) return;\n	float t = dot(e2, qv) * inv;\n	if (t > 1e-4 && t < hit.t) {\n		hit.t = t; hit.tri = i; hit.bc = vec2(u, v);\n	}\n}\n\nvec3 safeInvDir(vec3 d) {\n	const float e = 1e-9;\n	vec3 s = vec3(d.x < 0.0 ? -e : e, d.y < 0.0 ? -e : e, d.z < 0.0 ? -e : e);\n	vec3 dd = vec3(abs(d.x) < e ? s.x : d.x, abs(d.y) < e ? s.y : d.y, abs(d.z) < e ? s.z : d.z);\n	return 1.0 / dd;\n}\n\nvoid intersectBVH(vec3 ro, vec3 rd, inout Hit hit) {\n	if (uTriCount == 0) return;\n	vec3 invD = safeInvDir(rd);\n	int stack[32];\n	int sp = 0;\n	stack[sp++] = 0;\n	for (int guard = 0; guard < 4096; guard++) {\n		if (sp <= 0) break;\n		int node = stack[--sp];\n		vec4 a = fBVH(node * 2);\n		vec4 b = fBVH(node * 2 + 1);\n		if (!hitAABB(a.xyz, b.xyz, ro, invD, hit.t)) continue;\n		int count = int(b.w + 0.5);\n		if (count > 0) {\n			int start = int(a.w + 0.5);\n			for (int i = 0; i < count; i++) triIntersect(start + i, ro, rd, hit);\n		} else if (sp <= 30) {\n			int left = int(a.w + 0.5);\n			stack[sp++] = left + 1;\n			stack[sp++] = left;\n		}\n	}\n}\n\nvoid intersectGround(vec3 ro, vec3 rd, inout Hit hit) {\n	if (uGroundOn == 0) return;\n	if (abs(rd.y) < 1e-7) return;\n	float t = (uGroundY - ro.y) / rd.y;\n	if (t <= 1e-4 || t >= hit.t) return;\n	vec3 p = ro + rd * t;\n	if (uGroundRadius > 0.0 && dot(p.xz, p.xz) > uGroundRadius * uGroundRadius) return;\n	hit.t = t; hit.tri = -2; hit.bc = vec2(0.0);\n}\n\nvoid intersectScene(vec3 ro, vec3 rd, inout Hit hit) {\n	intersectGround(ro, rd, hit);\n	intersectBVH(ro, rd, hit);\n}\n\nstruct Surface {\n	vec3 pos, ng, ns;\n	vec2 uv;\n	vec3 albedo;\n	float alpha, rough, metal, transm, ior, cutoff;\n	int amode;\n	vec3 emission;\n	bool isLight;\n};\n\nvoid triVerts(int i, out vec3 v0, out vec3 v1, out vec3 v2) {\n	v0 = fTri(i * 3 + 0).xyz;\n	v1 = fTri(i * 3 + 1).xyz;\n	v2 = fTri(i * 3 + 2).xyz;\n}\n\nvec2 triUV(int i, vec2 bc) {\n	vec4 a0 = fAttr(i * 4 + 0);\n	vec4 a1 = fAttr(i * 4 + 1);\n	vec4 a2 = fAttr(i * 4 + 2);\n	vec4 a3 = fAttr(i * 4 + 3);\n	vec2 uv0 = vec2(a0.w, a1.w);\n	vec2 uv1 = vec2(a2.w, a3.x);\n	vec2 uv2 = vec2(a3.y, a3.z);\n	float w = 1.0 - bc.x - bc.y;\n	return uv0 * w + uv1 * bc.x + uv2 * bc.y;\n}\n\nbool insideOnlyHitFromOutside(int i, vec2 bc, vec3 rd) {\n	vec3 n0 = fAttr(i * 4 + 0).xyz;\n	vec3 n1 = fAttr(i * 4 + 1).xyz;\n	vec3 n2 = fAttr(i * 4 + 2).xyz;\n	vec3 outward = normalize(n0 * (1.0 - bc.x - bc.y) + n1 * bc.x + n2 * bc.y);\n	return dot(rd, outward) < 0.0;\n}\n\nMat matOfTri(int i) {\n	return loadMat(int(fTri(i * 3 + 0).w + 0.5));\n}\n\nfloat alphaOfTri(int i, vec2 bc, Mat m) {\n	if ((m.flags & MF_HAS_COLOR) == 0) return 1.0;\n	vec2 uv = triUV(i, bc);\n	bool rep = (m.flags & MF_WRAP_REPEAT) != 0;\n	return sampleAtlas(uAtlasC, m.rect, uv, rep).a;\n}\n\nbool alphaPassThrough(Mat m, float alpha) {\n	if (m.amode == 0) return false;\n	if (m.amode == 1) return alpha < m.cutoff;\n	return rnd() >= alpha;\n}\n\nvec3 triEmission(int i, vec2 bc) {\n	int matId = int(fTri(i * 3 + 0).w + 0.5);\n	Mat m = loadMat(matId);\n	vec2 uv = triUV(i, bc);\n	bool rep = (m.flags & MF_WRAP_REPEAT) != 0;\n	vec3 base = m.tint;\n	if ((m.flags & MF_HAS_COLOR) != 0) base *= srgbToLin(sampleAtlas(uAtlasC, m.rect, uv, rep).rgb);\n	if ((m.flags & MF_FORCE_EMISSION) != 0) return base * m.emisColor * m.emis;\n	if ((m.flags & MF_HAS_MER) != 0) {\n		float e = sampleAtlas(uAtlasM, m.rect, uv, rep).g;\n		return base * e * m.emis;\n	}\n	if ((m.flags & MF_HAS_EMISSIVE_MAP) != 0) {\n		vec3 emsCol = srgbToLin(sampleAtlas(uAtlasE, m.rect, uv, rep).rgb);\n		float mask = dot(emsCol, vec3(0.2126, 0.7152, 0.0722));\n		if ((m.flags & MF_EMIS_CUSTOM_COLOR) != 0) return m.emisColor * mask * m.emis;\n		if ((m.flags & MF_EMIS_MAIN_COLOR) != 0) return base * mask * m.emis;\n		return emsCol * m.emis;\n	}\n	if ((m.flags & MF_FULLBRIGHT) != 0) return base * m.emis;\n	return vec3(0.0);\n}\n\nvoid onb(vec3 n, out vec3 t, out vec3 b) {\n	float s = n.z >= 0.0 ? 1.0 : -1.0;\n	float a = -1.0 / (s + n.z);\n	float bb = n.x * n.y * a;\n	t = vec3(1.0 + s * n.x * n.x * a, s * bb, -s * n.x);\n	b = vec3(bb, s + n.y * n.y * a, -n.y);\n}\n\nSurface getSurface(Hit hit, vec3 ro, vec3 rd) {\n	Surface s;\n	s.pos = ro + rd * hit.t;\n	s.isLight = false;\n	s.transm = 0.0;\n	s.ior = 1.5;\n	s.cutoff = 0.0;\n	s.alpha = 1.0;\n	s.amode = 0;\n	s.emission = vec3(0.0);\n\n	if (hit.tri == -2) {\n		s.ng = vec3(0.0, 1.0, 0.0);\n		s.ns = s.ng;\n		s.uv = vec2(0.0);\n		s.albedo = uGroundColor;\n		if (uGroundTexOn == 1) {\n			vec2 groundUV = s.pos.xz / max(uGroundTexScale, 0.01);\n			s.albedo *= srgbToLin(sampleAtlas(uAtlasC, uGroundRect, groundUV, true).rgb);\n		}\n		s.rough = uGroundRough;\n		s.metal = uGroundMetal;\n		if (rd.y > 0.0) { s.ng = -s.ng; s.ns = -s.ns; }\n		return s;\n	}\n\n	int i = hit.tri;\n	vec3 v0, v1, v2;\n	triVerts(i, v0, v1, v2);\n	vec3 geoN = normalize(cross(v1 - v0, v2 - v0));\n\n	vec4 a0 = fAttr(i * 4 + 0);\n	vec4 a1 = fAttr(i * 4 + 1);\n	vec4 a2 = fAttr(i * 4 + 2);\n	vec4 a3 = fAttr(i * 4 + 3);\n	float w = 1.0 - hit.bc.x - hit.bc.y;\n	vec3 sn = a0.xyz * w + a1.xyz * hit.bc.x + a2.xyz * hit.bc.y;\n	if (dot(sn, sn) < 1e-12) sn = geoN; else sn = normalize(sn);\n	if (dot(sn, geoN) < 0.0) geoN = -geoN;\n\n	vec2 uv0 = vec2(a0.w, a1.w);\n	vec2 uv1 = vec2(a2.w, a3.x);\n	vec2 uv2 = vec2(a3.y, a3.z);\n	s.uv = uv0 * w + uv1 * hit.bc.x + uv2 * hit.bc.y;\n	s.isLight = a3.w > 0.5;\n\n	if (dot(geoN, rd) > 0.0) { geoN = -geoN; sn = -sn; }\n	s.ng = geoN;\n	s.ns = sn;\n\n	int matId = int(fTri(i * 3 + 0).w + 0.5);\n	Mat m = loadMat(matId);\n	bool rep = (m.flags & MF_WRAP_REPEAT) != 0;\n\n	vec3 base = m.tint;\n	float alpha = 1.0;\n	if ((m.flags & MF_HAS_COLOR) != 0) {\n		vec4 c = sampleAtlas(uAtlasC, m.rect, s.uv, rep);\n		base *= srgbToLin(c.rgb);\n		alpha = c.a;\n	}\n	s.albedo = base;\n	s.alpha = alpha;\n	s.cutoff = m.cutoff;\n	s.amode = m.amode;\n	s.rough = clamp(m.rough, 0.015, 1.0);\n	s.metal = clamp(m.metal, 0.0, 1.0);\n	s.transm = clamp(m.transm, 0.0, 1.0);\n	s.ior = max(m.ior, 1.001);\n\n	if ((m.flags & MF_HAS_MER) != 0) {\n		vec3 mer = sampleAtlas(uAtlasM, m.rect, s.uv, rep).rgb;\n		s.metal = clamp(mer.r, 0.0, 1.0);\n		s.rough = clamp(mer.b, 0.015, 1.0);\n		s.emission = base * mer.g * m.emis;\n	} else if ((m.flags & MF_HAS_EMISSIVE_MAP) != 0) {\n		vec3 emsCol = srgbToLin(sampleAtlas(uAtlasE, m.rect, s.uv, rep).rgb);\n		float mask = dot(emsCol, vec3(0.2126, 0.7152, 0.0722));\n		if ((m.flags & MF_EMIS_CUSTOM_COLOR) != 0) {\n			s.emission = m.emisColor * mask * m.emis;\n		} else if ((m.flags & MF_EMIS_MAIN_COLOR) != 0) {\n			s.emission = base * mask * m.emis;\n		} else {\n			s.emission = emsCol * m.emis;\n		}\n	} else if ((m.flags & MF_FULLBRIGHT) != 0) {\n		s.emission = base * m.emis;\n	}\n	if ((m.flags & MF_FORCE_EMISSION) != 0) s.emission = base * m.emisColor * m.emis;\n	if ((m.flags & MF_FORCE_ROUGHNESS) != 0) s.rough = clamp(m.rough, 0.015, 1.0);\n	if ((m.flags & MF_FORCE_METALNESS) != 0) s.metal = clamp(m.metal, 0.0, 1.0);\n\n	if ((m.flags & MF_HAS_NORMAL) != 0 && m.nscale > 0.0) {\n		vec2 d1 = uv1 - uv0;\n		vec2 d2 = uv2 - uv0;\n		float r = d1.x * d2.y - d2.x * d1.y;\n		if (abs(r) > 1e-9) {\n			vec3 e1 = v1 - v0;\n			vec3 e2 = v2 - v0;\n			vec3 T = (e1 * d2.y - e2 * d1.y) / r;\n			T = normalize(T - s.ns * dot(s.ns, T));\n			if (dot(T, T) > 0.5) {\n				vec3 B = cross(s.ns, T);\n				vec3 nt = sampleAtlas(uAtlasN, m.rect, s.uv, rep).rgb * 2.0 - 1.0;\n				nt.xy *= m.nscale;\n				vec3 mapped = normalize(T * nt.x + B * nt.y + s.ns * max(nt.z, 0.05));\n				if (dot(mapped, s.ng) > 0.0) s.ns = mapped;\n			}\n		}\n	}\n	return s;\n}\n\nvec2 dirToEnvUV(vec3 d) {\n	float phi = atan(d.z, d.x) + uEnvRotation;\n	float u = fract(phi * 0.15915494309189535 + 0.5);\n	float v = acos(clamp(d.y, -1.0, 1.0)) * INV_PI;\n	return vec2(u, clamp(v, 0.0, 1.0));\n}\n\nvec3 envRadiance(vec3 d) {\n	return texture(uEnv, dirToEnvUV(d)).rgb * uEnvIntensity;\n}\n\nfloat envPdfDir(vec3 d) {\n	int W = uEnvDist.x, H = uEnvDist.y;\n	vec2 uv = dirToEnvUV(d);\n	int x = clamp(int(uv.x * float(W)), 0, W - 1);\n	int y = clamp(int(uv.y * float(H)), 0, H - 1);\n	float pm = (texelFetch(uEnvMarg, ivec2(y + 1, 0), 0).r - texelFetch(uEnvMarg, ivec2(y, 0), 0).r) * float(H);\n	float pc = (texelFetch(uEnvCond, ivec2(x + 1, y), 0).r - texelFetch(uEnvCond, ivec2(x, y), 0).r) * float(W);\n	float sinT = sqrt(max(0.0, 1.0 - d.y * d.y));\n	if (sinT < 1e-5) return 0.0;\n	return (pm * pc) / (2.0 * PI * PI * sinT);\n}\n\nvec3 envSampleDir(out vec3 L, out float pdf) {\n	int W = uEnvDist.x, H = uEnvDist.y;\n	float r1 = rnd(), r2 = rnd();\n	int lo = 0, hi = H;\n	for (int i = 0; i < 12; i++) {\n		if (lo + 1 >= hi) break;\n		int mid = (lo + hi) >> 1;\n		if (texelFetch(uEnvMarg, ivec2(mid, 0), 0).r <= r1) lo = mid; else hi = mid;\n	}\n	int y = lo;\n	float m0 = texelFetch(uEnvMarg, ivec2(y, 0), 0).r;\n	float m1 = texelFetch(uEnvMarg, ivec2(y + 1, 0), 0).r;\n	float dy = (m1 > m0) ? (r1 - m0) / (m1 - m0) : 0.5;\n\n	lo = 0; hi = W;\n	for (int i = 0; i < 12; i++) {\n		if (lo + 1 >= hi) break;\n		int mid = (lo + hi) >> 1;\n		if (texelFetch(uEnvCond, ivec2(mid, y), 0).r <= r2) lo = mid; else hi = mid;\n	}\n	int x = lo;\n	float c0 = texelFetch(uEnvCond, ivec2(x, y), 0).r;\n	float c1 = texelFetch(uEnvCond, ivec2(x + 1, y), 0).r;\n	float dx = (c1 > c0) ? (r2 - c0) / (c1 - c0) : 0.5;\n\n	float u = (float(x) + dx) / float(W);\n	float v = (float(y) + dy) / float(H);\n	float theta = v * PI;\n	float phi = (u - 0.5) * 2.0 * PI - uEnvRotation;\n	float sinT = sin(theta);\n	L = vec3(sinT * cos(phi), cos(theta), sinT * sin(phi));\n	float pm = (m1 - m0) * float(H);\n	float pc = (c1 - c0) * float(W);\n	pdf = (sinT > 1e-5) ? (pm * pc) / (2.0 * PI * PI * sinT) : 0.0;\n	return envRadiance(L);\n}\n\nvec3 sunRadianceFor(vec3 d) {\n	if (uSunEnable == 0) return vec3(0.0);\n	return dot(d, uSunDir) >= uSunCosRadius ? uSunRadiance : vec3(0.0);\n}\nfloat sunPdfFor(vec3 d) {\n	if (uSunEnable == 0) return 0.0;\n	return dot(d, uSunDir) >= uSunCosRadius ? (1.0 / uSunSolidAngle) : 0.0;\n}\nvec3 sunSampleDir(out float pdf) {\n	float cosT = mix(uSunCosRadius, 1.0, rnd());\n	float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));\n	float phi = 2.0 * PI * rnd();\n	vec3 t, b;\n	onb(uSunDir, t, b);\n	pdf = 1.0 / uSunSolidAngle;\n	return normalize(t * (sinT * cos(phi)) + b * (sinT * sin(phi)) + uSunDir * cosT);\n}\n\nfloat luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }\nfloat powerHeuristic(float a, float b) {\n	float aa = a * a, bb = b * b;\n	return aa / max(aa + bb, 1e-9);\n}\nfloat specProb(vec3 albedo, float metal) {\n	float ds = luma(albedo) * (1.0 - metal);\n	float ss = luma(mix(vec3(0.04), albedo, metal)) + metal * 0.5;\n	return clamp(ss / max(ds + ss, 1e-4), 0.12, 0.9);\n}\nfloat distGGX(float NoH, float a) {\n	float a2 = a * a;\n	float d = NoH * NoH * (a2 - 1.0) + 1.0;\n	return a2 / max(PI * d * d, 1e-9);\n}\nfloat smithG(float NoV, float NoL, float a) {\n	float a2 = a * a;\n	float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);\n	float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);\n	return 0.5 / max(gv + gl, 1e-9);\n}\n\nvec3 bsdfEval(vec3 N, vec3 V, vec3 L, vec3 albedo, float rough, float metal, out float pdf) {\n	pdf = 0.0;\n	float NoL = dot(N, L);\n	float NoV = dot(N, V);\n	if (NoL <= 0.0 || NoV <= 0.0) return vec3(0.0);\n	vec3 H = normalize(V + L);\n	float NoH = max(dot(N, H), 0.0);\n	float VoH = max(dot(V, H), 1e-5);\n	float a = max(rough * rough, 1e-4);\n	vec3 f0 = mix(vec3(0.04), albedo, metal);\n	vec3 F = f0 + (1.0 - f0) * pow(clamp(1.0 - VoH, 0.0, 1.0), 5.0);\n	float D = distGGX(NoH, a);\n	float Vis = smithG(NoV, NoL, a);\n	vec3 spec = F * D * Vis;\n	vec3 diff = albedo * (1.0 - metal) * INV_PI;\n	float ps = specProb(albedo, metal);\n	float pdfS = D * NoH / (4.0 * VoH);\n	float pdfD = NoL * INV_PI;\n	pdf = mix(pdfD, pdfS, ps);\n	return (diff + spec) * NoL;\n}\n\nvec3 cosineSample(vec3 n, vec2 u) {\n	float r = sqrt(u.x);\n	float phi = 2.0 * PI * u.y;\n	vec3 t, b;\n	onb(n, t, b);\n	return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));\n}\n\nvec3 ggxSampleH(vec3 n, float a, vec2 u) {\n	float phi = 2.0 * PI * u.x;\n	float cosT = sqrt(max(0.0, (1.0 - u.y) / (1.0 + (a * a - 1.0) * u.y)));\n	float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));\n	vec3 t, b;\n	onb(n, t, b);\n	return normalize(t * (sinT * cos(phi)) + b * (sinT * sin(phi)) + n * cosT);\n}\n\nbool bsdfSample(vec3 N, vec3 V, vec3 albedo, float rough, float metal, out vec3 L, out vec3 weight, out float pdf) {\n	float ps = specProb(albedo, metal);\n	float a = max(rough * rough, 1e-4);\n	if (rnd() < ps) {\n		vec3 H = ggxSampleH(N, a, rnd2());\n		L = reflect(-V, H);\n	} else {\n		L = cosineSample(N, rnd2());\n	}\n	if (dot(N, L) <= 0.0) return false;\n	vec3 f = bsdfEval(N, V, L, albedo, rough, metal, pdf);\n	if (pdf <= 1e-8) return false;\n	weight = f / pdf;\n	return true;\n}\n\nfloat fresnelDielectric(float cosI, float eta) {\n	float s2 = eta * eta * (1.0 - cosI * cosI);\n	if (s2 > 1.0) return 1.0;\n	float cosT = sqrt(max(0.0, 1.0 - s2));\n	float rs = (eta * cosI - cosT) / (eta * cosI + cosT);\n	float rp = (cosI - eta * cosT) / (cosI + eta * cosT);\n	return 0.5 * (rs * rs + rp * rp);\n}\n\nbool anyHitBVH(vec3 ro, vec3 rd, float maxT) {\n	if (uTriCount == 0) return false;\n	vec3 invD = safeInvDir(rd);\n	int stack[32];\n	int sp = 0;\n	stack[sp++] = 0;\n	for (int guard = 0; guard < 4096; guard++) {\n		if (sp <= 0) break;\n		int node = stack[--sp];\n		vec4 a = fBVH(node * 2);\n		vec4 b = fBVH(node * 2 + 1);\n		if (!hitAABB(a.xyz, b.xyz, ro, invD, maxT)) continue;\n		int count = int(b.w + 0.5);\n		if (count > 0) {\n			int start = int(a.w + 0.5);\n			for (int i = 0; i < count; i++) {\n				Hit h;\n				h.t = maxT;\n				h.tri = -1;\n				h.bc = vec2(0.0);\n				triIntersect(start + i, ro, rd, h);\n				if (h.tri >= 0) {\n					if (isNegativeCubeTri(h.tri)) continue;\n					Mat hm = matOfTri(h.tri);\n					if (hm.amode == 0 || !alphaPassThrough(hm, alphaOfTri(h.tri, h.bc, hm))) return true;\n				}\n			}\n		} else if (sp <= 30) {\n			int left = int(a.w + 0.5);\n			stack[sp++] = left + 1;\n			stack[sp++] = left;\n		}\n	}\n	return false;\n}\n\nbool occluded(vec3 ro, vec3 rd, float maxT, bool skipGround) {\n	if (!skipGround && uGroundOn == 1) {\n		Hit gh;\n		gh.t = maxT;\n		gh.tri = -1;\n		gh.bc = vec2(0.0);\n		intersectGround(ro, rd, gh);\n		if (gh.tri == -2) return true;\n	}\n	return anyHitBVH(ro, rd, maxT);\n}\n\nstruct LightSample { vec3 dir; vec3 radiance; float pdf; float dist; };\n\nLightSample sampleTriLight(vec3 p) {\n	LightSample ls;\n	ls.dir = vec3(0.0, 1.0, 0.0);\n	ls.radiance = vec3(0.0);\n	ls.pdf = 0.0;\n	ls.dist = 0.0;\n	if (uLightCount == 0) return ls;\n\n	int li = min(int(rnd() * float(uLightCount)), uLightCount - 1);\n	int tri = int(texelFetch(uLightTex, ivec2(li - (li / uLightW) * uLightW, li / uLightW), 0).r + 0.5);\n	vec3 v0, v1, v2;\n	triVerts(tri, v0, v1, v2);\n	float su = sqrt(rnd());\n	float b0 = 1.0 - su;\n	float b1 = rnd() * su;\n	float b2 = max(0.0, 1.0 - b0 - b1);\n	vec3 q = v0 * b0 + v1 * b1 + v2 * b2;\n	vec3 cr = cross(v1 - v0, v2 - v0);\n	float area2 = length(cr);\n	if (area2 < 1e-9) return ls;\n	vec3 nl = cr / area2;\n	float area = 0.5 * area2;\n\n	vec3 dv = q - p;\n	float d2 = dot(dv, dv);\n	if (d2 < 1e-8) return ls;\n	float d = sqrt(d2);\n	ls.dir = dv / d;\n	ls.dist = d;\n	float cosL = abs(dot(nl, ls.dir));\n	if (cosL < 1e-5) return ls;\n	ls.pdf = d2 / (cosL * area * float(uLightCount));\n	ls.radiance = triEmission(tri, vec2(b1, b2));\n	return ls;\n}\n\nfloat triLightPdf(int tri, vec3 from, vec3 hitP) {\n	if (uLightCount == 0) return 0.0;\n	vec3 v0, v1, v2;\n	triVerts(tri, v0, v1, v2);\n	vec3 cr = cross(v1 - v0, v2 - v0);\n	float area2 = length(cr);\n	if (area2 < 1e-9) return 0.0;\n	vec3 nl = cr / area2;\n	vec3 dv = hitP - from;\n	float d2 = dot(dv, dv);\n	float d = sqrt(max(d2, 1e-12));\n	float cosL = abs(dot(nl, dv / d));\n	if (cosL < 1e-5) return 0.0;\n	return d2 / (cosL * 0.5 * area2 * float(uLightCount));\n}\n\nfloat shadowCatcherAlpha(vec3 p, vec3 n) {\n	float full = 0.0, vis = 0.0;\n	if (uSunEnable == 1) {\n		float pdf;\n		vec3 L = sunSampleDir(pdf);\n		float ndl = max(dot(n, L), 0.0);\n		if (ndl > 0.0 && pdf > 0.0) {\n			float c = luma(uSunRadiance) * ndl / pdf;\n			full += c;\n			if (!occluded(p + n * RAY_EPS, L, TFAR, true)) vis += c;\n		}\n	}\n	{\n		vec3 L;\n		float pdf;\n		vec3 Le = envSampleDir(L, pdf);\n		float ndl = max(dot(n, L), 0.0);\n		if (ndl > 0.0 && pdf > 1e-8) {\n			float c = luma(Le) * ndl / pdf;\n			full += c;\n			if (!occluded(p + n * RAY_EPS, L, TFAR, true)) vis += c;\n		}\n	}\n	if (full <= 1e-8) return 0.0;\n	return clamp(1.0 - vis / full, 0.0, 1.0);\n}\n\nvec3 tracePath(vec3 ro, vec3 rd, out float alphaOut, out vec3 gAlbedo, out vec3 gNormal, out float gDepth) {\n	vec3 radiance = vec3(0.0);\n	vec3 beta = vec3(1.0);\n	float lastPdf = 0.0;\n	bool specularPath = true;\n	alphaOut = 1.0;\n	gAlbedo = vec3(0.0);\n	gNormal = vec3(0.0);\n	gDepth = 1.0e6;\n	bool gWritten = false;\n	int bounce = 0;\n	vec3 prevPos = ro;\n\n	for (int iter = 0; iter < 96; iter++) {\n		Hit hit;\n		hit.t = TFAR;\n		hit.tri = -1;\n		hit.bc = vec2(0.0);\n		intersectScene(ro, rd, hit);\n		if (hit.tri >= 0 && isNegativeCubeTri(hit.tri)) {\n			if (bounce > 0 || (isInsideOnlyTri(hit.tri) && insideOnlyHitFromOutside(hit.tri, hit.bc, rd))) {\n				ro += rd * (hit.t + RAY_EPS);\n				continue;\n			}\n		}\n\n		if (hit.tri == -1) {\n			vec3 env = envRadiance(rd);\n			vec3 sun = sunRadianceFor(rd);\n			if (bounce == 0) {\n				if (uBgMode == 1) { radiance += uBgColor; gAlbedo = uBgColor; }\n				else if (uBgMode == 2) { alphaOut = 0.0; gAlbedo = vec3(0.0); }\n				else { radiance += env + sun; gAlbedo = env; }\n				gNormal = -rd;\n			} else {\n				float we = specularPath ? 1.0 : powerHeuristic(lastPdf, envPdfDir(rd));\n				float ws = specularPath ? 1.0 : powerHeuristic(lastPdf, sunPdfFor(rd));\n				radiance += beta * (env * we + sun * ws);\n			}\n			break;\n		}\n\n		Surface s = getSurface(hit, ro, rd);\n\n		bool passThrough = false;\n		if (s.amode == 1) passThrough = s.alpha < s.cutoff;\n		else if (s.amode == 2) passThrough = rnd() >= s.alpha;\n		if (passThrough) {\n			ro = s.pos + rd * RAY_EPS;\n			continue;\n		}\n\n		if (bounce == 0 && hit.tri == -2 && uGroundCatcher == 1) {\n			alphaOut = shadowCatcherAlpha(s.pos, s.ng);\n			gAlbedo = vec3(0.0);\n			gNormal = s.ng;\n			gDepth = hit.t;\n			break;\n		}\n\n		if (!gWritten) {\n			gAlbedo = s.albedo;\n			gNormal = s.ns;\n			gDepth = hit.t;\n			gWritten = true;\n		}\n\n		if (dot(s.emission, s.emission) > 0.0) {\n			float w = 1.0;\n			if (!specularPath && s.isLight) {\n				w = powerHeuristic(lastPdf, triLightPdf(hit.tri, prevPos, s.pos));\n			}\n			radiance += beta * s.emission * w;\n		}\n\n		if (bounce >= uMaxBounce) break;\n\n		vec3 V = -rd;\n\n		if (s.transm > 0.0 && rnd() < s.transm) {\n			bool entering = dot(rd, s.ng) < 0.0;\n			vec3 n = s.ng;\n			float eta = entering ? (1.0 / s.ior) : s.ior;\n			float cosI = clamp(dot(-rd, n), 0.0, 1.0);\n			float F = fresnelDielectric(cosI, eta);\n			vec3 newDir;\n			if (rnd() < F) {\n				newDir = reflect(rd, n);\n			} else {\n				newDir = refract(rd, n, eta);\n				if (dot(newDir, newDir) < 1e-8) newDir = reflect(rd, n);\n				else beta *= s.albedo;\n			}\n			ro = s.pos + newDir * RAY_EPS;\n			rd = normalize(newDir);\n			specularPath = true;\n			bounce++;\n			continue;\n		}\n\n		vec3 shadeOrigin = s.pos + s.ng * RAY_EPS;\n\n		int nLS = max(uLightSamples, 1);\n		float invLS = 1.0 / float(nLS);\n		for (int ls_i = 0; ls_i < nLS; ls_i++) {\n			vec3 L;\n			float pdfL;\n			vec3 Le = envSampleDir(L, pdfL);\n			if (pdfL > 1e-8 && dot(L, s.ns) > 0.0 && dot(L, s.ng) > 0.0 && dot(Le, Le) > 0.0) {\n				float pdfB;\n				vec3 f = bsdfEval(s.ns, V, L, s.albedo, s.rough, s.metal, pdfB);\n				if (dot(f, f) > 0.0 && !occluded(shadeOrigin, L, TFAR, false)) {\n					radiance += beta * f * Le * powerHeuristic(pdfL, pdfB) / pdfL * invLS;\n				}\n			}\n		}\n\n		if (uSunEnable == 1) {\n			for (int ls_i = 0; ls_i < nLS; ls_i++) {\n				float pdfL;\n				vec3 L = sunSampleDir(pdfL);\n				if (pdfL > 0.0 && dot(L, s.ns) > 0.0 && dot(L, s.ng) > 0.0) {\n					float pdfB;\n					vec3 f = bsdfEval(s.ns, V, L, s.albedo, s.rough, s.metal, pdfB);\n					if (dot(f, f) > 0.0 && !occluded(shadeOrigin, L, TFAR, false)) {\n						radiance += beta * f * uSunRadiance * powerHeuristic(pdfL, pdfB) / pdfL * invLS;\n					}\n				}\n			}\n		}\n\n		if (uLightCount > 0) {\n			for (int ls_i = 0; ls_i < nLS; ls_i++) {\n				LightSample ls = sampleTriLight(s.pos);\n				if (ls.pdf > 1e-8 && dot(ls.dir, s.ns) > 0.0 && dot(ls.dir, s.ng) > 0.0 && dot(ls.radiance, ls.radiance) > 0.0) {\n					float pdfB;\n					vec3 f = bsdfEval(s.ns, V, ls.dir, s.albedo, s.rough, s.metal, pdfB);\n					if (dot(f, f) > 0.0 && !occluded(shadeOrigin, ls.dir, ls.dist - RAY_EPS * 2.0, false)) {\n						radiance += beta * f * ls.radiance * powerHeuristic(ls.pdf, pdfB) / ls.pdf * invLS;\n					}\n				}\n			}\n		}\n\n		vec3 L, weight;\n		float pdfB;\n		if (!bsdfSample(s.ns, V, s.albedo, s.rough, s.metal, L, weight, pdfB)) break;\n		if (dot(L, s.ng) <= 0.0) break;\n\n		beta *= weight;\n		lastPdf = pdfB;\n		specularPath = false;\n		prevPos = s.pos;\n		ro = shadeOrigin;\n		rd = L;\n		bounce++;\n\n		if (bounce > 2) {\n			float q = clamp(max(beta.r, max(beta.g, beta.b)), 0.02, 0.95);\n			if (rnd() > q) break;\n			beta /= q;\n		}\n		if (dot(beta, beta) < 1e-12) break;\n	}\n\n	if (uClamp > 0.0) {\n		float m = max(radiance.r, max(radiance.g, radiance.b));\n		if (m > uClamp) radiance *= uClamp / m;\n	}\n	if (any(isnan(radiance)) || any(isinf(radiance))) radiance = vec3(0.0);\n	return radiance;\n}\n\nvoid main() {\n	ivec2 px = ivec2(gl_FragCoord.xy);\n	g_rng = uint(px.x) * 1973u + uint(px.y) * 9277u + uint(uSeed) * 26699u;\n	g_rng = g_rng | 1u;\n	pcgNext();\n	pcgNext();\n\n	vec2 jitter = rnd2();\n	vec2 ndc = ((gl_FragCoord.xy - 0.5 + jitter) / uResolution) * 2.0 - 1.0;\n\n	vec3 ro, rd;\n	if (uOrtho == 1) {\n		ro = uCamPos + uCamRight * (ndc.x * uOrthoHalfHeight * uAspect) + uCamUp * (ndc.y * uOrthoHalfHeight);\n		rd = normalize(uCamForward);\n	} else {\n		rd = normalize(uCamForward + uCamRight * (ndc.x * uTanHalfFov * uAspect) + uCamUp * (ndc.y * uTanHalfFov));\n		ro = uCamPos;\n		if (uAperture > 0.0 && uFocusDist > 0.0) {\n			vec3 focal = ro + rd * (uFocusDist / max(dot(rd, normalize(uCamForward)), 1e-4));\n			float ang = 2.0 * PI * rnd();\n			float rad = uAperture * sqrt(rnd());\n			ro += uCamRight * (cos(ang) * rad) + uCamUp * (sin(ang) * rad);\n			rd = normalize(focal - ro);\n		}\n	}\n\n	float alpha, depth;\n	vec3 alb, nrm;\n	vec3 c = tracePath(ro, rd, alpha, alb, nrm, depth);\n#ifndef PTR_COLOR_ONLY\n	vec3 demod = c / max(alb, vec3(0.02));\n	float l = dot(demod, vec3(0.2126, 0.7152, 0.0722));\n#endif\n\n	vec4 prev = vec4(0.0);\n#ifndef PTR_COLOR_ONLY\n	vec4 prevA = vec4(0.0);\n	vec4 prevN = vec4(0.0);\n	vec4 prevM = vec4(0.0);\n#endif\n	if (uReset == 0) {\n		prev = texelFetch(uAccum, px, 0);\n#ifndef PTR_COLOR_ONLY\n		prevA = texelFetch(uAccumAlb, px, 0);\n		prevN = texelFetch(uAccumNrm, px, 0);\n		prevM = texelFetch(uAccumMom, px, 0);\n#endif\n	}\n	outColor = prev + vec4(c, alpha);\n#ifndef PTR_COLOR_ONLY\n	outAlbedo = prevA + vec4(alb, 1.0);\n	outNormal = prevN + vec4(nrm, 1.0);\n	outMoment = prevM + vec4(l, l * l, depth, 1.0);\n#endif\n}\n";
 
   // plugins/georenderer/src/shaders/denoise.frag.glsl
   var denoise_frag_default = "#version 300 es\nprecision highp float;\nprecision highp sampler2D;\n\nuniform sampler2D uColorIn;\nuniform sampler2D uAlbedoTex;\nuniform sampler2D uNormalTex;\nuniform sampler2D uMomentTex;\nuniform sampler2D uVarianceIn;\nuniform int   uFirst;\nuniform float uInvSpp;\nuniform int   uStepSize;\nuniform float uPhiColorBase;\nuniform float uPhiNormal;\nuniform float uPhiDepth;\n\nlayout(location = 0) out vec4 fragColor;\nlayout(location = 1) out float outVariance;\n\nvec3 loadColor(ivec2 p, ivec2 size) {\n	p = clamp(p, ivec2(0), size - 1);\n	if (uFirst == 1) {\n		vec3 c = texelFetch(uColorIn, p, 0).rgb * uInvSpp;\n		vec3 a = max(texelFetch(uAlbedoTex, p, 0).rgb * uInvSpp, vec3(0.02));\n		return c / a;\n	}\n	return texelFetch(uColorIn, p, 0).rgb;\n}\n\nfloat loadVariance(ivec2 p, ivec2 size) {\n	p = clamp(p, ivec2(0), size - 1);\n	if (uFirst == 1) {\n		vec4 m = texelFetch(uMomentTex, p, 0) * uInvSpp;\n		float perSample = max(m.y - m.x * m.x, 0.0);\n		return perSample * uInvSpp;\n	}\n	return texelFetch(uVarianceIn, p, 0).r;\n}\n\nfloat loadDepth(ivec2 p, ivec2 size) {\n	p = clamp(p, ivec2(0), size - 1);\n	vec4 m = texelFetch(uMomentTex, p, 0);\n	return m.w > 0.0 ? m.z / m.w : 1.0e6;\n}\n\nfloat kern(int d) {\n	int i = d < 0 ? -d : d;\n	if (i == 2) return 0.0625;\n	if (i == 1) return 0.25;\n	return 0.375;\n}\n\nvoid main() {\n	ivec2 size = textureSize(uColorIn, 0);\n	ivec2 px = ivec2(gl_FragCoord.xy);\n\n	vec3 cp = loadColor(px, size);\n	float varP = loadVariance(px, size);\n	float depthP = loadDepth(px, size);\n	vec3 np = texelFetch(uNormalTex, px, 0).xyz;\n	float nl = length(np);\n	np = nl > 1e-6 ? np / nl : vec3(0.0, 1.0, 0.0);\n\n	float phiColor = uPhiColorBase * sqrt(max(varP, 0.0)) + 1e-4;\n\n	vec3 sum = vec3(0.0);\n	float wsum = 0.0;\n	float varSum = 0.0;\n	float varWsum = 0.0;\n	for (int dy = -2; dy <= 2; dy++) {\n		for (int dx = -2; dx <= 2; dx++) {\n			ivec2 q = px + ivec2(dx, dy) * uStepSize;\n			if (q.x < 0 || q.y < 0 || q.x >= size.x || q.y >= size.y) continue;\n			vec3 cq = loadColor(q, size);\n			float varQ = loadVariance(q, size);\n			float depthQ = loadDepth(q, size);\n			vec3 nq = texelFetch(uNormalTex, q, 0).xyz;\n			float ql = length(nq);\n			nq = ql > 1e-6 ? nq / ql : vec3(0.0, 1.0, 0.0);\n\n			vec3 dc = cp - cq;\n			float wc = exp(-dot(dc, dc) / (phiColor * phiColor));\n			float nd = max(0.0, 1.0 - dot(np, nq));\n			float wn = exp(-nd * nd / max(uPhiNormal, 1e-5));\n			float dd = abs(depthP - depthQ);\n			float wd = (depthP > 1.0e5 || depthQ > 1.0e5) ? (dd < 1.0 ? 1.0 : 0.0)\n				: exp(-dd * dd / max(uPhiDepth * depthP * depthP + 1e-6, 1e-6));\n			float w = kern(dx) * kern(dy) * wc * wn * wd;\n			sum += cq * w;\n			wsum += w;\n			varSum += varQ * w * w;\n			varWsum += w;\n		}\n	}\n	fragColor = vec4(wsum > 1e-8 ? sum / wsum : cp, 1.0);\n	outVariance = varWsum > 1e-8 ? varSum / (varWsum * varWsum) : varP;\n}\n";
@@ -1092,6 +1097,27 @@
     return { cond, marg, width: DW, height: DH };
   }
 
+  // plugins/georenderer/src/scene/group-overrides.js
+  function groupChainForElement(element) {
+    const chain = [];
+    let parent = element && element.parent;
+    while (parent && typeof parent === "object") {
+      if (parent.uuid) chain.push(parent.uuid);
+      parent = parent.parent;
+    }
+    return chain;
+  }
+  function materialKey(texture, groupChain = []) {
+    return (texture ? texture.uuid : "__none__") + "|" + groupChain.join("/");
+  }
+  function resolveMaterialOverride(texture, groupChain, textureOverrides, groupOverrides) {
+    const result = { ...texture && textureOverrides && textureOverrides[texture.uuid] || {} };
+    for (let i = groupChain.length - 1; i >= 0; i--) {
+      Object.assign(result, groupOverrides && groupOverrides[groupChain[i]] || {});
+    }
+    return result;
+  }
+
   // plugins/georenderer/src/scene/geometry.js
   var MF_HAS_COLOR = 1;
   var MF_HAS_MER = 2;
@@ -1184,6 +1210,7 @@
     const normals = [];
     const uvs = [];
     const texRefs = [];
+    const groupRefs = [];
     const flips = [];
     const negativeCube = [];
     const insideOnly = [];
@@ -1194,6 +1221,7 @@
     elements.forEach((element) => {
       if (!element || element.visibility === false) return;
       const mesh = element.mesh;
+      const groupChain = groupChainForElement(element);
       if (!mesh || !mesh.geometry || mesh.visible === false) return;
       const geo = mesh.geometry;
       const posAttr = geo.attributes && geo.attributes.position;
@@ -1265,6 +1293,7 @@
           }
         }
         texRefs.push(tex || null);
+        groupRefs.push(groupChain);
         flips.push(mirrored);
         negativeCube.push(!!hasNegativeSize);
         insideOnly.push(insideOnlyFace);
@@ -1275,6 +1304,7 @@
       normals: new Float32Array(normals),
       uvs: new Float32Array(uvs),
       texRefs,
+      groupRefs,
       flips,
       negativeCube,
       insideOnly,
@@ -1364,15 +1394,28 @@
   }
 
   // plugins/georenderer/src/scene/materials.js
-  function buildMaterials(gl, texRefs, settings2, overrides) {
-    const slotList = [{ texture: null, uuid: "__none__" }];
-    const slotOfUuid = /* @__PURE__ */ new Map();
+  function buildMaterials(gl, texRefs, groupRefs, settings2, overrides, groupOverrides) {
+    const slotList = [];
+    const slotOfKey = /* @__PURE__ */ new Map();
     for (let i = 0; i < texRefs.length; i++) {
       const tex = texRefs[i];
-      if (!tex) continue;
-      if (!slotOfUuid.has(tex.uuid)) {
-        slotOfUuid.set(tex.uuid, slotList.length);
-        slotList.push({ texture: tex, uuid: tex.uuid });
+      const groupChain = groupRefs[i] || [];
+      const key = materialKey(tex, groupChain);
+      if (!slotOfKey.has(key)) {
+        slotOfKey.set(key, slotList.length);
+        slotList.push({ texture: tex, uuid: tex ? tex.uuid : "__none__", groupChain });
+      }
+    }
+    let groundSlot = -1;
+    if (settings2.ground_texture_uuid && typeof Texture !== "undefined") {
+      const groundTexture = (Texture.all || []).find((texture) => texture.uuid === settings2.ground_texture_uuid);
+      if (groundTexture) {
+        const key = materialKey(groundTexture, []);
+        if (!slotOfKey.has(key)) {
+          slotOfKey.set(key, slotList.length);
+          slotList.push({ texture: groundTexture, uuid: groundTexture.uuid, groupChain: [] });
+        }
+        groundSlot = slotOfKey.get(key);
       }
     }
     const maxTexSize = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096, 8192);
@@ -1406,7 +1449,7 @@
       slot.colorTex = colorTex;
       slot.group = group;
       slot.side = getMaterialSide(colorTex || tex, settings2.render_sides);
-      const slotOv = overrides && overrides[tex.uuid] || {};
+      const slotOv = resolveMaterialOverride(tex, slot.groupChain, overrides, groupOverrides);
       let emisTex = null;
       if (slotOv.emissive_map) {
         const allTex = (typeof Texture !== "undefined" ? Texture.all : []) || [];
@@ -1522,7 +1565,7 @@
     slotList.forEach((slot, i) => {
       const o = i * MAT_TEXELS * 4;
       const tex = slot.texture;
-      const ov = tex && overrides && overrides[tex.uuid] || {};
+      const ov = resolveMaterialOverride(tex, slot.groupChain, overrides, groupOverrides);
       const hasMER = !!slot.mer;
       const hasEmissiveMap = !!slot.emissiveMap;
       const fullbrightTex = !!(tex && (tex.render_mode === "emissive" || tex.render_mode === "additive"));
@@ -1536,6 +1579,9 @@
       if (!hasMER && hasEmissiveMap && slot.emissiveColorMain) flags |= MF_EMIS_MAIN_COLOR;
       if (!hasMER && hasEmissiveMap && slot.emissiveColorCustom) flags |= MF_EMIS_CUSTOM_COLOR;
       if (!hasMER && !hasEmissiveMap && emisVal > 0) flags |= MF_FULLBRIGHT;
+      if (ov.emissive != null) flags |= 512;
+      if (ov.roughness != null) flags |= 1024;
+      if (ov.metalness != null) flags |= 2048;
       if (tex && tex.render_mode === "additive") flags |= MF_ADDITIVE;
       if (!tex || tex.wrap_mode !== "clamp") flags |= MF_WRAP_REPEAT;
       const tint = ov.color ? hexToLinear(ov.color) : slot.color ? [1, 1, 1] : [0.8, 0.8, 0.8];
@@ -1562,15 +1608,18 @@
       matData[o + 18] = emisColor[2];
       matData[o + 19] = 0;
       if (emisVal <= 0) slot.emissive = false;
+      else if (ov.emissive != null) slot.emissive = true;
       else if (hasMER) slot.emissive = emissiveSlots.has(i);
       else if (hasEmissiveMap) slot.emissive = emissiveMapSlots.has(i);
       else slot.emissive = true;
     });
     return {
       slotList,
-      slotOfUuid,
+      slotOfKey,
+      groundRect: groundSlot >= 0 && slotList[groundSlot].color ? slotList[groundSlot].rect : null,
       matData,
       matCount: slotList.length,
+      textureCount: new Set(texRefs.filter(Boolean).map((texture) => texture.uuid)).size,
       atlasColor: texColor,
       atlasMER: texMER,
       atlasNormal: texNRM,
@@ -1651,7 +1700,7 @@
       gl.disable(gl.CULL_FACE);
       return this;
     }
-    buildScene(settings2, overrides) {
+    buildScene(settings2, overrides, groupOverrides) {
       const gl = this.gl;
       const t0 = performance.now();
       this.disposeScene();
@@ -1660,7 +1709,7 @@
         this.scene = { triCount: 0, lightCount: 0, stats: { tris: 0, textures: 0, nodes: 0, ms: 0 } };
         return this.scene;
       }
-      const mats = buildMaterials(gl, geo.texRefs, settings2, overrides);
+      const mats = buildMaterials(gl, geo.texRefs, geo.groupRefs, settings2, overrides, groupOverrides);
       const bvh = buildBVH(geo.positions, geo.triCount);
       const n = geo.triCount;
       const triPos = new Float32Array(n * TRI_POS_TEXELS * 4);
@@ -1669,7 +1718,7 @@
       for (let k = 0; k < n; k++) {
         const t = bvh.order[k];
         const tex = geo.texRefs[t];
-        const slot = tex ? mats.slotOfUuid.get(tex.uuid) || 0 : 0;
+        const slot = mats.slotOfKey.get(materialKey(tex, geo.groupRefs[t])) || 0;
         const isLight = mats.slotList[slot] && mats.slotList[slot].emissive ? 1 : 0;
         if (isLight && lightList.length < 4096) lightList.push(k);
         const po = k * TRI_POS_TEXELS * 4;
@@ -1734,10 +1783,11 @@
         atlasMER: mats.atlasMER,
         atlasNormal: mats.atlasNormal,
         atlasEmissive: mats.atlasEmissive,
+        groundRect: mats.groundRect,
         bounds: computeBounds(geo.positions, n),
         stats: {
           tris: n,
-          textures: mats.matCount - 1,
+          textures: mats.textureCount,
           nodes: bvh.nodeCount,
           atlas: mats.atlasSize,
           lights: lightList.length,
@@ -1989,6 +2039,10 @@
       gl.uniform1f(u.uGroundRadius, settings2.ground_radius);
       const gc = hexToLinear(settings2.ground_color);
       gl.uniform3f(u.uGroundColor, gc[0], gc[1], gc[2]);
+      const groundRect = s.groundRect;
+      gl.uniform1i(u.uGroundTexOn, groundRect ? 1 : 0);
+      gl.uniform4f(u.uGroundRect, groundRect ? groundRect.x : 0, groundRect ? groundRect.y : 0, groundRect ? groundRect.w : 1, groundRect ? groundRect.h : 1);
+      gl.uniform1f(u.uGroundTexScale, Math.max(0.01, settings2.ground_texture_scale || 1));
       return true;
     }
     renderPass() {
@@ -2317,8 +2371,8 @@
     return wrap;
   }
   function onSettingChanged(key) {
-    saveSettings();
     if (PTR.onSettingChanged) PTR.onSettingChanged(key);
+    saveSettings();
     const kind = CHANGE_KIND[key] || "reset";
     const t = PTR.tracer;
     if (!t) return;
@@ -2349,6 +2403,8 @@
 
   // plugins/georenderer/src/ui/io.js
   function loadEnvFile(file) {
+    PTR.scenePresetRequest++;
+    PTR.sceneCubemap = null;
     const name = file.name || "";
     const reader = new FileReader();
     reader.onerror = () => showError(new Error("读取文件失败"));
@@ -2671,7 +2727,168 @@
     }
   }
 
+  // plugins/georenderer/src/ui/group-panel.js
+  function buildGroupList() {
+    const host = PTR.nodes.groupList;
+    if (!host) return;
+    host.replaceChildren();
+    const groups = typeof Group !== "undefined" && Group.all || [];
+    if (!groups.length) {
+      host.appendChild(el("div", { class: "ptr_note", text: "当前模型没有组；在 Blockbench 的大纲中建立组后可在这里分别配置。" }));
+      return;
+    }
+    for (const group of groups) {
+      const box = el("div", { class: "ptr_mat" });
+      box.appendChild(el("div", { class: "ptr_mat_head", text: group.name || "未命名组" }));
+      let ov = PTR.groupOverrides[group.uuid] || null;
+      const toggle = el("input", { type: "checkbox" });
+      toggle.checked = !!ov;
+      const settingsBox = el("div");
+      settingsBox.hidden = !ov;
+      const update = () => {
+        saveSettings();
+        if (PTR.raster) PTR.raster.refreshModel();
+        if (PTR.tracer) {
+          clearTimeout(PTR.rebuildTimer);
+          PTR.rebuildTimer = setTimeout(rebuildScene, 180);
+        }
+      };
+      toggle.addEventListener("change", () => {
+        if (toggle.checked) {
+          ov = { roughness: PTR.settings.def_roughness, metalness: PTR.settings.def_metalness, emissive: 0 };
+          PTR.groupOverrides[group.uuid] = ov;
+        } else {
+          delete PTR.groupOverrides[group.uuid];
+          ov = null;
+        }
+        settingsBox.hidden = !ov;
+        if (ov) buildGroupList();
+        update();
+      });
+      box.appendChild(makeRow("覆盖材质", [toggle]));
+      for (const [label, key, min, max, step] of [
+        ["粗糙度", "roughness", 0, 1, 0.01],
+        ["金属度", "metalness", 0, 1, 0.01],
+        ["自发光", "emissive", 0, 20, 0.1]
+      ]) {
+        const input = el("input", { type: "number", min, max, step, value: ov ? ov[key] : 0 });
+        input.addEventListener("change", () => {
+          if (!ov) return;
+          const value = Number(input.value);
+          if (!Number.isFinite(value)) return;
+          ov[key] = clamp(value, min, max);
+          input.value = ov[key];
+          update();
+        });
+        settingsBox.appendChild(makeRow(label, [input]));
+      }
+      const color = el("input", { type: "color", value: ov && ov.emissive_color || "#ffffff" });
+      color.addEventListener("input", () => {
+        if (ov) {
+          ov.emissive_color = color.value;
+          update();
+        }
+      });
+      settingsBox.appendChild(makeRow("发光颜色", [color]));
+      box.appendChild(settingsBox);
+      host.appendChild(box);
+    }
+  }
+
+  // plugins/georenderer/src/scene/presets.js
+  var SCENE_PRESETS = {
+    studio: { label: "工作室", env_mode: "gradient", grad_top: "#dce2e8", grad_bottom: "#30343b", sky_horizon: "#bec8d2", ground_color: "#aab0b6", sun_color: "#ffffff", sun_intensity: 5, env_intensity: 1.2 },
+    minecraft_overworld: { label: "主世界", env_mode: "sky", sky_zenith: "#4f8bd7", sky_horizon: "#c5e2fc", sky_ground: "#64765b", ground_color: "#6c8b55", sun_color: "#fff4cf", sun_intensity: 6, env_intensity: 1 },
+    minecraft_end: { label: "末地", env_mode: "gradient", grad_top: "#19132c", grad_bottom: "#55456b", sky_horizon: "#60517a", ground_color: "#c9c5a2", sun_color: "#bba7ff", sun_intensity: 1.2, env_intensity: 0.6 },
+    minecraft_nether: { label: "下界", env_mode: "gradient", grad_top: "#2d0b0b", grad_bottom: "#8a3020", sky_horizon: "#8a3020", ground_color: "#59332d", sun_color: "#ff7b38", sun_intensity: 2.5, env_intensity: 0.8 }
+  };
+  function applyPreset(settings2, id) {
+    const preset = SCENE_PRESETS[id];
+    if (!preset) return false;
+    settings2.scene_preset = id;
+    for (const [key, value] of Object.entries(preset)) if (key !== "label") settings2[key] = value;
+    return true;
+  }
+  function applyTimeOfDay(settings2, hour) {
+    const time = clamp(Number(hour) || 0, 0, 24);
+    settings2.time_of_day = time;
+    settings2.sun_azimuth = time * 15;
+    settings2.sun_elevation = Math.sin((time - 6) * Math.PI / 12) * 70;
+    settings2.sun_enable = time >= 5.5 && time <= 18.5;
+    return time;
+  }
+  function formatClock(hour) {
+    const minutes = Math.round(clamp(Number(hour) || 0, 0, 24) * 60);
+    return String(Math.floor(minutes / 60)).padStart(2, "0") + ":" + String(minutes % 60).padStart(2, "0");
+  }
+
+  // plugins/georenderer/src/scene/blockbench-scene.js
+  function cubeFace(direction) {
+    const [x, y, z] = direction;
+    const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
+    if (ax >= ay && ax >= az) return x > 0 ? [0, -z / ax, -y / ax] : [1, z / ax, -y / ax];
+    if (ay >= ax && ay >= az) return y > 0 ? [2, x / ay, z / ay] : [3, x / ay, -z / ay];
+    return z > 0 ? [4, x / az, -y / az] : [5, -x / az, -y / az];
+  }
+  function cubemapToEquirect(cubemap, width = 512, height = 256) {
+    const faces = cubemap && cubemap.image;
+    if (!Array.isArray(faces) || faces.length !== 6) return null;
+    const faceData = faces.map((face) => {
+      const image = face && (face.image || face);
+      if (!image || !image.width || !image.height) throw new Error("Blockbench 环境贴图尚未加载完成");
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.drawImage(image, 0, 0);
+      return { width: canvas.width, height: canvas.height, data: context.getImageData(0, 0, canvas.width, canvas.height).data };
+    });
+    const data = new Float32Array(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      const latitude = Math.PI * (0.5 - (y + 0.5) / height);
+      for (let x = 0; x < width; x++) {
+        const longitude = 2 * Math.PI * ((x + 0.5) / width - 0.5);
+        const direction = [Math.cos(latitude) * Math.cos(longitude), Math.sin(latitude), Math.cos(latitude) * Math.sin(longitude)];
+        const [index, u, v] = cubeFace(direction);
+        const face = faceData[index];
+        const fx = Math.max(0, Math.min(face.width - 1, Math.floor((u + 1) * 0.5 * face.width)));
+        const fy = Math.max(0, Math.min(face.height - 1, Math.floor((v + 1) * 0.5 * face.height)));
+        const source = (fy * face.width + fx) * 4;
+        const destination = (y * width + x) * 4;
+        for (let channel = 0; channel < 3; channel++) data[destination + channel] = srgbToLinear(face.data[source + channel] / 255);
+        data[destination + 3] = 1;
+      }
+    }
+    return { width, height, data };
+  }
+  async function loadBlockbenchScene(id) {
+    if (typeof PreviewScene === "undefined") return null;
+    const scene = PreviewScene.scenes && PreviewScene.scenes[id];
+    if (!scene || scene.require_minecraft_eula) return null;
+    if (!scene.loaded && scene.lazyLoadFromWeb) await scene.lazyLoadFromWeb();
+    if (!scene.cubemap) return null;
+    return { cubemap: scene.cubemap, environment: cubemapToEquirect(scene.cubemap) };
+  }
+
   // plugins/georenderer/src/ui/sidebar.js
+  function makeGroundTextureRow() {
+    const select = el("select");
+    PTR.refreshGroundTextures = () => {
+      select.replaceChildren(el("option", { value: "", text: "纯色地面" }));
+      for (const texture of typeof Texture !== "undefined" && Texture.all || []) {
+        select.appendChild(el("option", { value: texture.uuid, text: texture.name || texture.uuid }));
+      }
+      select.value = PTR.settings.ground_texture_uuid || "";
+    };
+    PTR.refreshGroundTextures();
+    select.addEventListener("change", () => {
+      PTR.settings.ground_texture_uuid = select.value;
+      saveSettings();
+      if (PTR.raster) PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === select.value));
+      if (PTR.tracer) rebuildScene();
+    });
+    return makeRow("地面纹理", [select]);
+  }
   function buildSidebar() {
     PTR.controls = [];
     const renderCards = [
@@ -2739,23 +2956,47 @@
       ])
     ];
     const presets = el("div", { class: "ptr_presets" });
-    Object.keys(SKY_PRESETS).forEach((name) => {
-      const b = el("button", { class: "ptr_btn", text: name });
-      b.addEventListener("click", () => {
-        Object.assign(PTR.settings, SKY_PRESETS[name]);
+    PTR.nodes.sceneSource = el("div", { class: "ptr_note", text: "可使用 Blockbench 已加载的场景贴图；不可用时使用相近的程序化氛围。" });
+    Object.entries(SCENE_PRESETS).forEach(([id, preset]) => {
+      const button = el("button", { class: "ptr_btn", text: preset.label });
+      button.addEventListener("click", async () => {
+        const request = ++PTR.scenePresetRequest;
+        applyPreset(PTR.settings, id);
+        applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
+        PTR.sceneCubemap = null;
+        PTR.customEnv = null;
+        PTR.customEnvName = "";
+        PTR.nodes.sceneSource.textContent = "正在读取 Blockbench 场景…";
+        PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
         syncControls2();
         saveSettings();
         try {
-          if (PTR.tracer) {
-            PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
-            PTR.tracer.reset();
-          }
+          if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, null);
         } catch (err) {
           showError(err);
         }
+        try {
+          const builtIn = await loadBlockbenchScene(id);
+          if (request !== PTR.scenePresetRequest) return;
+          if (builtIn && builtIn.environment) {
+            PTR.sceneCubemap = builtIn.cubemap;
+            PTR.customEnv = builtIn.environment;
+            PTR.customEnvName = preset.label;
+            PTR.settings.env_mode = "image";
+            PTR.nodes.sceneSource.textContent = "使用 Blockbench 内置“" + preset.label + "”环境贴图";
+            if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+          } else {
+            PTR.nodes.sceneSource.textContent = "内置贴图不可用，使用“" + preset.label + "”程序化氛围";
+          }
+          syncControls2();
+          saveSettings();
+        } catch (err) {
+          if (request === PTR.scenePresetRequest) PTR.nodes.sceneSource.textContent = "内置贴图读取失败，已使用程序化氛围";
+        }
       });
-      presets.appendChild(b);
+      presets.appendChild(button);
     });
+    PTR.nodes.timeDisplay = el("strong", { class: "ptr_time", text: formatClock(PTR.settings.time_of_day) });
     const envFile = el("input", { type: "file", accept: ".hdr,.png,.jpg,.jpeg,.webp", style: { display: "none" } });
     envFile.addEventListener("change", () => {
       const f = envFile.files && envFile.files[0];
@@ -2784,8 +3025,14 @@
     envBtns.appendChild(btnClear);
     PTR.nodes.envName = el("span", { class: "ptr_note", text: "(未载入)" });
     const envCards = [
-      card("环境光", "wb_sunny", [
+      card("场景与时间", "public", [
         presets,
+        PTR.nodes.sceneSource,
+        rowSlider("当前时间", "time_of_day", 0, 24, 0.25, 2),
+        PTR.nodes.timeDisplay,
+        el("div", { class: "ptr_note", text: "时间会联动太阳高度和方位；也可继续手动调整光照方向。" })
+      ]),
+      card("环境光", "wb_sunny", [
         rowSelect("环境类型", "env_mode", { sky: "程序化天空", gradient: "渐变", solid: "纯色", image: "HDR / 图片" }),
         envBtns,
         PTR.nodes.envName,
@@ -2816,6 +3063,8 @@
         rowCheck("阴影捕捉（透明）", "ground_catcher"),
         rowNumber("地面高度", "ground_y", -1e3, 1e3, 0.5),
         rowColor("颜色", "ground_color"),
+        makeGroundTextureRow(),
+        rowSlider("纹理尺寸", "ground_texture_scale", 0.25, 64, 0.25, 2),
         rowSlider("粗糙度", "ground_rough", 0.02, 1, 0.01, 2),
         rowSlider("金属度", "ground_metal", 0, 1, 0.01, 2),
         rowNumber("半径（0=无限）", "ground_radius", 0, 1e5, 1),
@@ -2823,7 +3072,12 @@
       ])
     ];
     PTR.nodes.matlist = el("div", { id: "ptr_matlist" });
+    PTR.nodes.groupList = el("div", { id: "ptr_grouplist" });
     const materialCards = [
+      card("按组覆盖", "account_tree", [
+        el("div", { class: "ptr_note", text: "组级设置只影响该组及其子组中的模型；子组的设置会覆盖父组。不会修改 Blockbench 原模型材质。" }),
+        PTR.nodes.groupList
+      ]),
       card("材质默认值", "palette", [
         rowSlider("默认粗糙度", "def_roughness", 0, 1, 0.01, 2),
         rowSlider("默认金属度", "def_metalness", 0, 1, 0.01, 2),
@@ -2871,7 +3125,7 @@
         el("div", { class: "ptr_note", text: "水印会显示在画面左下角，并包含在“保存 PNG”导出的图片中。" })
       ])
     ];
-    return buildStages([
+    const stages = buildStages([
       { id: "camera", cards: [...cameraCards, ...materialCards] },
       { id: "scene", cards: envCards },
       { id: "preview", cards: [...renderCards, ...postCards] },
@@ -2879,6 +3133,9 @@
         el("div", { class: "ptr_note", text: "确认参数与画面后，点击下方“开始最终渲染”。" })
       ])] }
     ]);
+    buildGroupList();
+    buildMaterialList();
+    return stages;
   }
 
   // plugins/georenderer/src/ui/raster-preview.js
@@ -2896,9 +3153,11 @@
       this.grid = new THREE.GridHelper(256, 32, 5990516, 3489096);
       this.scene.add(this.grid);
       this.floor = new THREE.Mesh(new THREE.PlaneGeometry(2e3, 2e3), new THREE.MeshStandardMaterial({ color: 11053224, roughness: 0.9 }));
+      this.groundMap = null;
       this.floor.rotation.x = -Math.PI / 2;
       this.scene.add(this.floor);
       this.model = new THREE.Group();
+      this.ownedMaterials = [];
       this.scene.add(this.model);
       this.raf = 0;
       this.running = false;
@@ -2906,19 +3165,47 @@
     }
     refreshModel() {
       this.model.clear();
+      for (const material of this.ownedMaterials) material.dispose();
+      this.ownedMaterials = [];
       if (typeof Canvas !== "undefined" && Canvas.scene) Canvas.scene.updateMatrixWorld(true);
       const elements = typeof Outliner !== "undefined" && Outliner.elements || [];
       for (const element of elements) {
         const mesh = element && element.mesh;
         if (!mesh || element.visibility === false || mesh.visible === false) continue;
         const clone = mesh.clone(true);
+        const override = resolveMaterialOverride(null, groupChainForElement(element), null, PTR.groupOverrides);
+        if (Object.keys(override).length) {
+          clone.traverse((object) => {
+            if (!object.isMesh || !object.material) return;
+            const customize = (material) => {
+              const copy = material.clone();
+              if (override.roughness != null && "roughness" in copy) copy.roughness = override.roughness;
+              if (override.metalness != null && "metalness" in copy) copy.metalness = override.metalness;
+              if (override.emissive != null && copy.emissive) {
+                copy.emissive.set(override.emissive_color || "#ffffff");
+                copy.emissiveIntensity = override.emissive;
+              }
+              this.ownedMaterials.push(copy);
+              return copy;
+            };
+            object.material = Array.isArray(object.material) ? object.material.map(customize) : customize(object.material);
+          });
+        }
         clone.matrix.copy(mesh.matrixWorld);
         clone.matrixAutoUpdate = false;
         this.model.add(clone);
       }
     }
     setGroundTexture(texture) {
-      this.floor.material.map = texture || null;
+      if (this.groundMap) this.groundMap.dispose();
+      const image = texture && (texture.canvas || texture.img);
+      this.groundMap = image ? new THREE.Texture(image) : null;
+      if (this.groundMap) {
+        this.groundMap.wrapS = THREE.RepeatWrapping;
+        this.groundMap.wrapT = THREE.RepeatWrapping;
+        this.groundMap.needsUpdate = true;
+      }
+      this.floor.material.map = this.groundMap;
       this.floor.material.needsUpdate = true;
     }
     draw() {
@@ -2952,12 +3239,16 @@
       this.floor.material.color.set(settings2.ground_color);
       this.floor.material.roughness = settings2.ground_rough;
       this.floor.material.metalness = settings2.ground_metal;
+      if (this.groundMap) {
+        const repeat = 2e3 / Math.max(0.01, settings2.ground_texture_scale || 1);
+        this.groundMap.repeat.set(repeat, repeat);
+      }
       this.sun.visible = PTR.step !== "camera" && !!settings2.sun_enable;
       const dir = sunDirection(settings2);
       this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
       this.sun.intensity = Math.max(0, settings2.sun_intensity / 4);
       this.sun.color.set(settings2.sun_color);
-      this.scene.background = new THREE.Color(PTR.step === "camera" ? "#252b34" : settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon);
+      this.scene.background = PTR.step !== "camera" && settings2.bg_mode === "transparent" ? null : PTR.step !== "camera" && PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(PTR.step === "camera" ? "#252b34" : settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon);
       this.renderer.render(this.scene, target);
     }
     start() {
@@ -2978,8 +3269,11 @@
     dispose() {
       this.stop();
       this.model.clear();
+      for (const material of this.ownedMaterials) material.dispose();
+      this.ownedMaterials = [];
       this.floor.geometry.dispose();
       this.floor.material.dispose();
+      if (this.groundMap) this.groundMap.dispose();
       this.renderer.dispose();
     }
   };
@@ -3279,10 +3573,16 @@
         PTR.step = "camera";
         PTR.finalStarted = false;
         PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
+        PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
         PTR.onSettingChanged = (key) => {
           if (key === "res_width" || key === "res_height") fitFrame();
           if (key === "fov") PTR.cam.fov = PTR.settings.fov;
           if (key === "ortho") PTR.cam.ortho = !!PTR.settings.ortho;
+          if (key === "time_of_day") {
+            applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
+            if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
+          }
+          if (key === "ground_texture_uuid" && PTR.raster) PTR.raster.setGroundTexture((Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
         };
         PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
         PTR.frameResizeObs.observe(PTR.nodes.viewport);
@@ -3361,6 +3661,10 @@
       } catch (err) {
       }
       eventHandler = () => {
+        if (PTR.raster) PTR.raster.refreshModel();
+        if (PTR.refreshGroundTextures) PTR.refreshGroundTextures();
+        if (PTR.nodes.groupList) buildGroupList();
+        if (PTR.nodes.matlist) buildMaterialList();
         if (!PTR.open || !PTR.tracer) return;
         if (PTR.settings.auto_follow) {
           clearTimeout(PTR.rebuildTimer);

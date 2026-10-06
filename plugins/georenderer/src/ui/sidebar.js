@@ -1,8 +1,31 @@
-import { buildStages, card, rowCheck, rowColor, rowNumber, rowSelect, rowSlider, rowText, syncControls } from './controls.js';
+import { buildStages, card, makeRow, rowCheck, rowColor, rowNumber, rowSelect, rowSlider, rowText, syncControls } from './controls.js';
 import { el } from './dom.js';
 import { loadEnvFile } from './io.js';
-import { showError } from './render-loop.js';
-import { PTR, SKY_PRESETS, saveSettings } from './state.js';
+import { buildGroupList } from './group-panel.js';
+import { buildMaterialList } from './material-panel.js';
+import { rebuildScene, showError } from './render-loop.js';
+import { PTR, saveSettings } from './state.js';
+import { applyPreset, applyTimeOfDay, formatClock, SCENE_PRESETS } from '../scene/presets.js';
+import { loadBlockbenchScene } from '../scene/blockbench-scene.js';
+
+function makeGroundTextureRow() {
+	const select = el('select');
+	PTR.refreshGroundTextures = () => {
+		select.replaceChildren(el('option', { value: '', text: '纯色地面' }));
+		for (const texture of (typeof Texture !== 'undefined' && Texture.all) || []) {
+			select.appendChild(el('option', { value: texture.uuid, text: texture.name || texture.uuid }));
+		}
+		select.value = PTR.settings.ground_texture_uuid || '';
+	};
+	PTR.refreshGroundTextures();
+	select.addEventListener('change', () => {
+		PTR.settings.ground_texture_uuid = select.value;
+		saveSettings();
+		if (PTR.raster) PTR.raster.setGroundTexture(((typeof Texture !== 'undefined' && Texture.all) || []).find(texture => texture.uuid === select.value));
+		if (PTR.tracer) rebuildScene();
+	});
+	return makeRow('地面纹理', [select]);
+}
 
 export function buildSidebar() {
 	PTR.controls = [];
@@ -75,21 +98,43 @@ export function buildSidebar() {
 	];
 
 	const presets = el('div', { class: 'ptr_presets' });
-	Object.keys(SKY_PRESETS).forEach(name => {
-		const b = el('button', { class: 'ptr_btn', text: name });
-		b.addEventListener('click', () => {
-			Object.assign(PTR.settings, SKY_PRESETS[name]);
+	PTR.nodes.sceneSource = el('div', { class: 'ptr_note', text: '可使用 Blockbench 已加载的场景贴图；不可用时使用相近的程序化氛围。' });
+	Object.entries(SCENE_PRESETS).forEach(([id, preset]) => {
+		const button = el('button', { class: 'ptr_btn', text: preset.label });
+		button.addEventListener('click', async () => {
+			const request = ++PTR.scenePresetRequest;
+			applyPreset(PTR.settings, id);
+			applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
+			PTR.sceneCubemap = null;
+			PTR.customEnv = null;
+			PTR.customEnvName = '';
+			PTR.nodes.sceneSource.textContent = '正在读取 Blockbench 场景…';
+			PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
 			syncControls();
 			saveSettings();
+			try { if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, null); } catch (err) { showError(err); }
 			try {
-				if (PTR.tracer) {
-					PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
-					PTR.tracer.reset();
+				const builtIn = await loadBlockbenchScene(id);
+				if (request !== PTR.scenePresetRequest) return;
+				if (builtIn && builtIn.environment) {
+					PTR.sceneCubemap = builtIn.cubemap;
+					PTR.customEnv = builtIn.environment;
+					PTR.customEnvName = preset.label;
+					PTR.settings.env_mode = 'image';
+					PTR.nodes.sceneSource.textContent = '使用 Blockbench 内置“' + preset.label + '”环境贴图';
+					if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+				} else {
+					PTR.nodes.sceneSource.textContent = '内置贴图不可用，使用“' + preset.label + '”程序化氛围';
 				}
-			} catch (err) { showError(err); }
+				syncControls();
+				saveSettings();
+			} catch (err) {
+				if (request === PTR.scenePresetRequest) PTR.nodes.sceneSource.textContent = '内置贴图读取失败，已使用程序化氛围';
+			}
 		});
-		presets.appendChild(b);
+		presets.appendChild(button);
 	});
+	PTR.nodes.timeDisplay = el('strong', { class: 'ptr_time', text: formatClock(PTR.settings.time_of_day) });
 
 	const envFile = el('input', { type: 'file', accept: '.hdr,.png,.jpg,.jpeg,.webp', style: { display: 'none' } });
 	envFile.addEventListener('change', () => {
@@ -113,8 +158,14 @@ export function buildSidebar() {
 	PTR.nodes.envName = el('span', { class: 'ptr_note', text: '(未载入)' });
 
 	const envCards = [
-		card('环境光', 'wb_sunny', [
+		card('场景与时间', 'public', [
 			presets,
+			PTR.nodes.sceneSource,
+			rowSlider('当前时间', 'time_of_day', 0, 24, 0.25, 2),
+			PTR.nodes.timeDisplay,
+			el('div', { class: 'ptr_note', text: '时间会联动太阳高度和方位；也可继续手动调整光照方向。' }),
+		]),
+		card('环境光', 'wb_sunny', [
 			rowSelect('环境类型', 'env_mode', { sky: '程序化天空', gradient: '渐变', solid: '纯色', image: 'HDR / 图片' }),
 			envBtns,
 			PTR.nodes.envName,
@@ -145,6 +196,8 @@ export function buildSidebar() {
 			rowCheck('阴影捕捉（透明）', 'ground_catcher'),
 			rowNumber('地面高度', 'ground_y', -1000, 1000, 0.5),
 			rowColor('颜色', 'ground_color'),
+			makeGroundTextureRow(),
+			rowSlider('纹理尺寸', 'ground_texture_scale', 0.25, 64, 0.25, 2),
 			rowSlider('粗糙度', 'ground_rough', 0.02, 1, 0.01, 2),
 			rowSlider('金属度', 'ground_metal', 0, 1, 0.01, 2),
 			rowNumber('半径（0=无限）', 'ground_radius', 0, 100000, 1),
@@ -153,7 +206,12 @@ export function buildSidebar() {
 	];
 
 	PTR.nodes.matlist = el('div', { id: 'ptr_matlist' });
+	PTR.nodes.groupList = el('div', { id: 'ptr_grouplist' });
 	const materialCards = [
+		card('按组覆盖', 'account_tree', [
+			el('div', { class: 'ptr_note', text: '组级设置只影响该组及其子组中的模型；子组的设置会覆盖父组。不会修改 Blockbench 原模型材质。' }),
+			PTR.nodes.groupList,
+		]),
 		card('材质默认值', 'palette', [
 			rowSlider('默认粗糙度', 'def_roughness', 0, 1, 0.01, 2),
 			rowSlider('默认金属度', 'def_metalness', 0, 1, 0.01, 2),
@@ -203,7 +261,7 @@ export function buildSidebar() {
 		]),
 	];
 
-	return buildStages([
+	const stages = buildStages([
 		{ id: 'camera', cards: [...cameraCards, ...materialCards] },
 		{ id: 'scene', cards: envCards },
 		{ id: 'preview', cards: [...renderCards, ...postCards] },
@@ -211,4 +269,7 @@ export function buildSidebar() {
 			el('div', { class: 'ptr_note', text: '确认参数与画面后，点击下方“开始最终渲染”。' }),
 		])] },
 	]);
+	buildGroupList();
+	buildMaterialList();
+	return stages;
 }
