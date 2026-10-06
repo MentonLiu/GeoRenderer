@@ -2,6 +2,14 @@
 #ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }
 #ptr_root * { box-sizing: border-box; }
 #ptr_step_nav { display: flex; gap: 6px; padding: 9px 12px; background: var(--color-ui); border-bottom: 1px solid var(--color-border); }
+.ptr_workspace_mode { min-height: 360px !important; }
+.ptr_workspace_mode #ptr_step_nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; padding: 5px; }
+.ptr_workspace_mode .ptr_step { flex-direction: column; gap: 2px; padding: 5px 1px; font-size: 10px; line-height: 1.2; }
+.ptr_workspace_mode .ptr_step_number { width: 18px; height: 18px; flex-basis: 18px; }
+.ptr_workspace_mode #ptr_root { min-height: 0; }
+.ptr_workspace_mode #ptr_viewport { display: none; }
+.ptr_workspace_mode #ptr_sidebar { width: 100%; flex: 1 1 auto; border-left: 0; }
+#panel_georenderer_workspace { overflow: hidden; }
 .ptr_step { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 5px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-back); color: var(--color-text); cursor: pointer; font-size: 12px; }
 .ptr_step:hover { background: var(--color-selected); }
 .ptr_step.active { border-color: var(--color-accent); color: var(--color-light); box-shadow: inset 0 -2px var(--color-accent); }
@@ -25,7 +33,6 @@
 }
 #ptr_raster_canvas { position: absolute; inset: 0; }
 #ptr_canvas { position: absolute; inset: 0; }
-#ptr_frame[data-step="materials"] #ptr_raster_canvas { cursor: pointer; }
 #ptr_frame[data-step="preview"] #ptr_canvas,
 #ptr_frame[data-step="export"] #ptr_canvas { cursor: default; }
 #ptr_viewport canvas.dragging { cursor: grabbing; }

@@ -35,6 +35,9 @@ export const SKY_PRESETS = {
 
 export const PTR = {
 	dialog: null,
+	panel: null,
+	workspaceScene: null,
+	cameraInitialized: false,
 	tracer: null,
 	cam: new OrbitCam(),
 	settings: Object.assign({}, DEFAULTS),
