@@ -75,7 +75,7 @@ test('the original reference remains unchanged', async () => {
 test('registration and unload remove Blockbench resources', () => {
   const { plugin, listeners, actions, css } = loadPlugin();
   assert.equal(plugin.id, 'georenderer');
-  assert.equal(plugin.version, '2.1.0');
+  assert.equal(plugin.version, '0.1.1');
   plugin.onload();
   assert.equal(actions.length, 1);
   assert.equal(actions[0].id, 'georenderer_open');
