@@ -16,7 +16,7 @@
   var INTERACTIVE_PASS_CAP = 8;
   var IDLE_PASS_CAP = 64;
   var DEFAULTS = {
-    res_mode: "fit",
+    res_mode: "custom",
     res_width: 1280,
     res_height: 720,
     render_mode: "preview",
@@ -297,6 +297,9 @@
     interactTimer: 0,
     nodes: {},
     controls: [],
+    step: "camera",
+    finalStarted: false,
+    raster: null,
     refreshMaterialList: null,
     rebuildTimer: 0,
     autoFollow: false,
@@ -355,7 +358,7 @@
   function applyResolution() {
     const t = PTR.tracer;
     if (!t || !PTR.nodes.viewport) return;
-    const rect = PTR.nodes.viewport.getBoundingClientRect();
+    const rect = (PTR.nodes.frame || PTR.nodes.viewport).getBoundingClientRect();
     let w, h;
     if (PTR.settings.res_mode === "custom") {
       w = PTR.settings.res_width;
@@ -2193,7 +2196,7 @@
   function register(key, setter) {
     PTR.controls.push({ key, set: setter });
   }
-  function syncControls() {
+  function syncControls2() {
     PTR.controls.forEach((c) => {
       try {
         c.set(PTR.settings[c.key]);
@@ -2300,34 +2303,22 @@
     ]);
     return el("div", { class: "ptr_card" }, [head].concat(children));
   }
-  function buildTabs(tabs) {
+  function buildStages(stages) {
     const wrap = el("div", { id: "ptr_sidebar" });
-    const strip = el("div", { class: "ptr_tabs" });
-    const panes = el("div", { class: "ptr_tabpanes" });
-    tabs.forEach((tab, i) => {
-      const btn = el("button", { class: "ptr_tab", title: tab.title }, [
-        el("i", { class: "material-icons", text: tab.icon })
-      ]);
-      const pane = el("div", { class: "ptr_tabpane" }, tab.cards);
-      btn.addEventListener("click", () => {
-        strip.querySelectorAll(".ptr_tab").forEach((b) => b.classList.remove("active"));
-        panes.querySelectorAll(".ptr_tabpane").forEach((p) => p.classList.remove("active"));
-        btn.classList.add("active");
-        pane.classList.add("active");
-      });
-      if (i === 0) {
-        btn.classList.add("active");
-        pane.classList.add("active");
-      }
-      strip.appendChild(btn);
+    const panes = el("div", { class: "ptr_stagepanes" });
+    PTR.nodes.stagePanes = {};
+    stages.forEach((stage) => {
+      const pane = el("section", { class: "ptr_stagepane", "data-step": stage.id }, stage.cards);
+      pane.hidden = stage.id !== PTR.step;
+      PTR.nodes.stagePanes[stage.id] = pane;
       panes.appendChild(pane);
     });
-    wrap.appendChild(strip);
     wrap.appendChild(panes);
     return wrap;
   }
   function onSettingChanged(key) {
     saveSettings();
+    if (PTR.onSettingChanged) PTR.onSettingChanged(key);
     const kind = CHANGE_KIND[key] || "reset";
     const t = PTR.tracer;
     if (!t) return;
@@ -2367,7 +2358,7 @@
           PTR.customEnv = parseHDR(reader.result);
           PTR.customEnvName = name;
           PTR.settings.env_mode = "image";
-          syncControls();
+          syncControls2();
           PTR.nodes.envName.textContent = name + "  (" + PTR.customEnv.width + "×" + PTR.customEnv.height + ")";
           if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
           saveSettings();
@@ -2399,7 +2390,7 @@
             PTR.customEnv = { width: c.width, height: c.height, data };
             PTR.customEnvName = name;
             PTR.settings.env_mode = "image";
-            syncControls();
+            syncControls2();
             PTR.nodes.envName.textContent = name + "  (" + c.width + "×" + c.height + ")";
             if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
             saveSettings();
@@ -2624,7 +2615,7 @@
     if (PTR.settings.env_mode === "image" && !PTR.customEnv) {
       PTR.settings.env_mode = "sky";
     }
-    syncControls();
+    syncControls2();
     if (PTR.updateModeButton) PTR.updateModeButton();
     saveSettings();
     const t = PTR.tracer;
@@ -2665,7 +2656,7 @@
     PTR.customEnv = null;
     PTR.customEnvName = "";
     if (PTR.nodes.envName) PTR.nodes.envName.textContent = "(未载入)";
-    syncControls();
+    syncControls2();
     if (PTR.updateModeButton) PTR.updateModeButton();
     saveSettings();
     const t = PTR.tracer;
@@ -2714,13 +2705,22 @@
       if (PTR.cam.syncFromPreview()) {
         PTR.settings.fov = PTR.cam.fov;
         PTR.settings.ortho = PTR.cam.ortho;
-        syncControls();
+        syncControls2();
+        saveSettings();
         if (PTR.tracer) PTR.tracer.reset();
       }
     });
     const btnFrame = el("button", { class: "ptr_btn", text: "框选模型" });
     btnFrame.addEventListener("click", () => {
       if (PTR.tracer && PTR.tracer.scene) PTR.cam.frameBounds(PTR.tracer.scene.bounds);
+      else if (PTR.raster && PTR.raster.model) {
+        const bounds = new THREE.Box3().setFromObject(PTR.raster.model);
+        if (!bounds.isEmpty()) {
+          const center = bounds.getCenter(new THREE.Vector3());
+          const size = bounds.getSize(new THREE.Vector3());
+          PTR.cam.frameBounds({ center: center.toArray(), radius: size.length() / 2 });
+        }
+      }
       if (PTR.tracer) PTR.tracer.reset();
     });
     camBtns.appendChild(btnSync);
@@ -2743,7 +2743,7 @@
       const b = el("button", { class: "ptr_btn", text: name });
       b.addEventListener("click", () => {
         Object.assign(PTR.settings, SKY_PRESETS[name]);
-        syncControls();
+        syncControls2();
         saveSettings();
         try {
           if (PTR.tracer) {
@@ -2772,7 +2772,7 @@
       PTR.nodes.envName.textContent = "(未载入)";
       if (PTR.settings.env_mode === "image") {
         PTR.settings.env_mode = "sky";
-        syncControls();
+        syncControls2();
       }
       try {
         if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, null);
@@ -2871,13 +2871,131 @@
         el("div", { class: "ptr_note", text: "水印会显示在画面左下角，并包含在“保存 PNG”导出的图片中。" })
       ])
     ];
-    return buildTabs([
-      { title: "渲染", icon: "speed", cards: renderCards },
-      { title: "相机", icon: "videocam", cards: cameraCards },
-      { title: "环境", icon: "wb_sunny", cards: envCards },
-      { title: "材质", icon: "palette", cards: materialCards },
-      { title: "后期", icon: "tune", cards: postCards }
+    return buildStages([
+      { id: "camera", cards: [...cameraCards, ...materialCards] },
+      { id: "scene", cards: envCards },
+      { id: "preview", cards: [...renderCards, ...postCards] },
+      { id: "export", cards: [card("最终导出", "save_alt", [
+        el("div", { class: "ptr_note", text: "确认参数与画面后，点击下方“开始最终渲染”。" })
+      ])] }
     ]);
+  }
+
+  // plugins/georenderer/src/ui/raster-preview.js
+  var RasterPreview = class {
+    constructor(canvas) {
+      this.canvas = canvas;
+      this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+      this.scene = new THREE.Scene();
+      this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1e5);
+      this.orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1e5);
+      this.ambient = new THREE.AmbientLight(16777215, 1.2);
+      this.sun = new THREE.DirectionalLight(16777215, 1.5);
+      this.scene.add(this.ambient, this.sun);
+      this.grid = new THREE.GridHelper(256, 32, 5990516, 3489096);
+      this.scene.add(this.grid);
+      this.floor = new THREE.Mesh(new THREE.PlaneGeometry(2e3, 2e3), new THREE.MeshStandardMaterial({ color: 11053224, roughness: 0.9 }));
+      this.floor.rotation.x = -Math.PI / 2;
+      this.scene.add(this.floor);
+      this.model = new THREE.Group();
+      this.scene.add(this.model);
+      this.raf = 0;
+      this.running = false;
+      this.refreshModel();
+    }
+    refreshModel() {
+      this.model.clear();
+      if (typeof Canvas !== "undefined" && Canvas.scene) Canvas.scene.updateMatrixWorld(true);
+      const elements = typeof Outliner !== "undefined" && Outliner.elements || [];
+      for (const element of elements) {
+        const mesh = element && element.mesh;
+        if (!mesh || element.visibility === false || mesh.visible === false) continue;
+        const clone = mesh.clone(true);
+        clone.matrix.copy(mesh.matrixWorld);
+        clone.matrixAutoUpdate = false;
+        this.model.add(clone);
+      }
+    }
+    setGroundTexture(texture) {
+      this.floor.material.map = texture || null;
+      this.floor.material.needsUpdate = true;
+    }
+    draw() {
+      const width = Math.max(1, this.canvas.clientWidth);
+      const height = Math.max(1, this.canvas.clientHeight);
+      if (this.width !== width || this.height !== height) {
+        this.width = width;
+        this.height = height;
+        this.renderer.setSize(width, height, false);
+      }
+      const settings2 = PTR.settings;
+      if (settings2.auto_sync) PTR.cam.syncFromPreview();
+      const cam = PTR.cam.state();
+      const target = cam.ortho ? this.orthoCamera : this.camera;
+      if (cam.ortho) {
+        const halfH = cam.orthoHalfHeight;
+        target.left = -halfH * width / height;
+        target.right = halfH * width / height;
+        target.top = halfH;
+        target.bottom = -halfH;
+      } else {
+        target.fov = cam.fov;
+        target.aspect = width / height;
+      }
+      target.updateProjectionMatrix();
+      target.position.set(...cam.pos);
+      target.lookAt(...cam.target);
+      this.grid.visible = PTR.step === "camera";
+      this.floor.visible = PTR.step !== "camera" && !!settings2.ground_on;
+      this.floor.position.y = settings2.ground_y;
+      this.floor.material.color.set(settings2.ground_color);
+      this.floor.material.roughness = settings2.ground_rough;
+      this.floor.material.metalness = settings2.ground_metal;
+      this.sun.visible = PTR.step !== "camera" && !!settings2.sun_enable;
+      const dir = sunDirection(settings2);
+      this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
+      this.sun.intensity = Math.max(0, settings2.sun_intensity / 4);
+      this.sun.color.set(settings2.sun_color);
+      this.scene.background = new THREE.Color(PTR.step === "camera" ? "#252b34" : settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon);
+      this.renderer.render(this.scene, target);
+    }
+    start() {
+      if (this.running) return;
+      this.running = true;
+      const frame = () => {
+        if (!this.running) return;
+        if (this.canvas.isConnected) this.draw();
+        this.raf = requestAnimationFrame(frame);
+      };
+      frame();
+    }
+    stop() {
+      this.running = false;
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+    }
+    dispose() {
+      this.stop();
+      this.model.clear();
+      this.floor.geometry.dispose();
+      this.floor.material.dispose();
+      this.renderer.dispose();
+    }
+  };
+
+  // plugins/georenderer/src/ui/workflow-state.js
+  var STEPS = [
+    { id: "camera", label: "镜头与材质", icon: "videocam" },
+    { id: "scene", label: "场景", icon: "landscape" },
+    { id: "preview", label: "预览渲染", icon: "tune" },
+    { id: "export", label: "最终导出", icon: "save_alt" }
+  ];
+  function stepIndex(id) {
+    return STEPS.findIndex((step) => step.id === id);
+  }
+  function isTraceStep(id) {
+    return id === "preview" || id === "export";
   }
 
   // plugins/georenderer/src/ui/window.js
@@ -2930,11 +3048,24 @@
   }
   function buildWindow() {
     const canvas = el("canvas", { id: "ptr_canvas" });
+    const rasterCanvas = el("canvas", { id: "ptr_raster_canvas" });
     const overlay = el("div", { id: "ptr_overlay", text: "准备中（首次加载可能会较为卡顿）…" });
     const watermark = el("div", { id: "ptr_watermark" });
-    const viewport = el("div", { id: "ptr_viewport" }, [canvas, overlay, watermark]);
+    const frame = el("div", { id: "ptr_frame" }, [rasterCanvas, canvas, overlay, watermark]);
+    const viewport = el("div", { id: "ptr_viewport" }, [frame]);
     const sidebar = buildSidebar();
     const root = el("div", { id: "ptr_root" }, [viewport, sidebar]);
+    const nav = el("nav", { id: "ptr_step_nav", "aria-label": "渲染流程" });
+    PTR.nodes.navButtons = {};
+    for (const [index, step] of STEPS.entries()) {
+      const button = el("button", { type: "button", class: "ptr_step", title: step.label }, [
+        el("span", { class: "ptr_step_number", text: String(index + 1) }),
+        el("span", { text: step.label })
+      ]);
+      button.addEventListener("click", () => setStep(step.id));
+      PTR.nodes.navButtons[step.id] = button;
+      nav.appendChild(button);
+    }
     const bar = el("div");
     const progress = el("div", { id: "ptr_progress" }, [bar]);
     const status = el("div", { id: "ptr_status", text: "" });
@@ -2948,28 +3079,8 @@
       PTR.lastFrame = performance.now();
       updateStatus();
     });
-    const btnModeLabel = el("span", { text: "切换到成片渲染" });
-    const btnMode = el("button", { class: "ptr_btn" }, [btnModeLabel]);
-    btnMode.addEventListener("click", () => {
-      PTR.settings.render_mode = PTR.settings.render_mode === "final" ? "preview" : "final";
-      syncControls();
-      saveSettings();
-      updateModeButton();
-      if (PTR.paused) {
-        PTR.paused = false;
-        btnPauseIcon.textContent = "pause";
-        btnPauseLabel.textContent = "暂停";
-        PTR.lastFrame = performance.now();
-      }
-      updateStatus();
-    });
-    function updateModeButton() {
-      const isFinal = PTR.settings.render_mode === "final";
-      btnModeLabel.textContent = isFinal ? "切换到预览" : "切换到成片渲染";
-      btnMode.classList.toggle("accent", isFinal);
-    }
-    updateModeButton();
-    PTR.updateModeButton = updateModeButton;
+    const btnStart = el("button", { class: "ptr_btn accent", text: "开始最终渲染" });
+    btnStart.addEventListener("click", startFinal);
     const iconBtn = (icon, title, onClick) => {
       const b = el("button", { class: "ptr_iconbtn", title }, [el("i", { class: "material-icons", text: icon })]);
       b.addEventListener("click", onClick);
@@ -2997,16 +3108,18 @@
     const footer = el("div", { id: "ptr_footer" }, [
       status,
       progress,
-      btnMode,
+      btnStart,
       btnPause,
       toolGroup,
       btnSave
     ]);
     const wrapper = el("div", {
       style: { display: "flex", flexDirection: "column", height: "100%", minHeight: "420px" }
-    }, [root, footer]);
+    }, [nav, root, footer]);
     PTR.nodes = Object.assign(PTR.nodes || {}, {
       canvas,
+      rasterCanvas,
+      frame,
       overlay,
       viewport,
       sidebar,
@@ -3014,11 +3127,85 @@
       bar,
       wrapper,
       btnPause,
-      watermark
+      watermark,
+      btnStart,
+      btnSave,
+      toolGroup,
+      footer
     });
     root.style.flex = "1 1 auto";
     root.style.minHeight = "0";
+    attachViewportEvents(canvas);
+    attachViewportEvents(rasterCanvas);
     return wrapper;
+  }
+  function fitFrame() {
+    const frame = PTR.nodes.frame;
+    const viewport = PTR.nodes.viewport;
+    if (!frame || !viewport) return;
+    const width = viewport.clientWidth;
+    const height = viewport.clientHeight;
+    if (!width || !height) return;
+    const aspect = Math.max(0.1, PTR.settings.res_width / Math.max(1, PTR.settings.res_height));
+    const w = Math.min(width, height * aspect);
+    frame.style.width = Math.floor(w) + "px";
+    frame.style.height = Math.floor(w / aspect) + "px";
+  }
+  function setStep(id) {
+    if (stepIndex(id) < 0 || !PTR.dialog) return;
+    const wasTrace = isTraceStep(PTR.step);
+    PTR.step = id;
+    for (const step of STEPS) {
+      const active = step.id === id;
+      PTR.nodes.navButtons[step.id].classList.toggle("active", active);
+      PTR.nodes.navButtons[step.id].setAttribute("aria-current", active ? "step" : "false");
+      PTR.nodes.stagePanes[step.id].hidden = !active;
+    }
+    const trace = isTraceStep(id);
+    PTR.nodes.canvas.style.display = trace ? "block" : "none";
+    PTR.nodes.rasterCanvas.style.display = trace ? "none" : "block";
+    PTR.nodes.overlay.style.display = trace ? "" : "none";
+    PTR.nodes.watermark.style.display = trace ? "" : "none";
+    PTR.nodes.footer.style.display = trace ? "flex" : "none";
+    PTR.nodes.btnStart.style.display = id === "export" ? "" : "none";
+    PTR.nodes.btnSave.style.display = id === "export" && PTR.finalStarted ? "" : "none";
+    PTR.nodes.btnPause.style.display = id === "preview" || PTR.finalStarted ? "" : "none";
+    PTR.nodes.toolGroup.style.display = id === "preview" ? "flex" : "none";
+    if (trace) {
+      if (PTR.raster) PTR.raster.stop();
+      if (!PTR.tracer) {
+        PTR.settings.render_mode = "preview";
+        PTR.finalStarted = false;
+        try {
+          startRenderer();
+        } catch (err) {
+          showError(err);
+        }
+      } else if (id === "preview" && PTR.settings.render_mode !== "preview") {
+        PTR.settings.render_mode = "preview";
+        PTR.tracer.reset();
+        PTR.finalStarted = false;
+      }
+      if (PTR.tracer) applyResolution();
+    } else {
+      if (wasTrace && PTR.tracer) closeRenderer();
+      PTR.finalStarted = false;
+      if (PTR.raster) PTR.raster.start();
+    }
+    fitFrame();
+    if (trace && PTR.tracer) applyResolution();
+    saveSettings();
+  }
+  function startFinal() {
+    if (PTR.step !== "export" || !PTR.tracer) return;
+    PTR.finalStarted = true;
+    PTR.settings.render_mode = "final";
+    PTR.paused = false;
+    PTR.tracer.reset();
+    PTR.lastFrame = performance.now();
+    PTR.nodes.btnSave.style.display = "";
+    updateStatus();
+    saveSettings();
   }
   function startRenderer() {
     const tracer = new PathTracer(PTR.nodes.canvas);
@@ -3043,7 +3230,6 @@
       });
       PTR.resizeObs.observe(PTR.nodes.viewport);
     }
-    attachViewportEvents(PTR.nodes.canvas);
     PTR.open = true;
     PTR.paused = false;
     PTR.lastFrame = performance.now();
@@ -3053,7 +3239,7 @@
   function openWindow() {
     if (typeof Dialog === "undefined") return;
     if (PTR.dialog) {
-      closeRenderer();
+      closeWindow();
       try {
         PTR.dialog.hide();
       } catch (e) {
@@ -3074,7 +3260,7 @@
       buttons: [],
       lines: [content],
       onCancel() {
-        closeRenderer();
+        closeWindow();
       },
       onResize() {
         clearTimeout(PTR.interactTimer);
@@ -3090,7 +3276,17 @@
     setTimeout(() => {
       try {
         if (PTR.dialog && PTR.dialog.object) PTR.dialog.object.classList.add("ptr_dialog_root");
-        startRenderer();
+        PTR.step = "camera";
+        PTR.finalStarted = false;
+        PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
+        PTR.onSettingChanged = (key) => {
+          if (key === "res_width" || key === "res_height") fitFrame();
+          if (key === "fov") PTR.cam.fov = PTR.settings.fov;
+          if (key === "ortho") PTR.cam.ortho = !!PTR.settings.ortho;
+        };
+        PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
+        PTR.frameResizeObs.observe(PTR.nodes.viewport);
+        setStep("camera");
       } catch (err) {
         showError(err);
         if (PTR.nodes.overlay) {
@@ -3099,9 +3295,21 @@
       }
     }, 60);
   }
+  function closeWindow() {
+    closeRenderer();
+    if (PTR.raster) {
+      PTR.raster.dispose();
+      PTR.raster = null;
+    }
+    if (PTR.frameResizeObs) {
+      PTR.frameResizeObs.disconnect();
+      PTR.frameResizeObs = null;
+    }
+    PTR.onSettingChanged = null;
+  }
 
   // plugins/georenderer/src/assets/georenderer.css
-  var georenderer_default = "\n#ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }\n#ptr_root * { box-sizing: border-box; }\n#ptr_viewport {\n	flex: 1 1 auto; position: relative; background: #101014;\n	display: flex; align-items: center; justify-content: center; overflow: hidden;\n	min-width: 240px;\n}\n#ptr_viewport canvas {\n	width: 100%; height: 100%; object-fit: contain;\n	image-rendering: auto; cursor: grab;\n	background-image: linear-gradient(45deg, #2a2a30 25%, transparent 25%),\n		linear-gradient(-45deg, #2a2a30 25%, transparent 25%),\n		linear-gradient(45deg, transparent 75%, #2a2a30 75%),\n		linear-gradient(-45deg, transparent 75%, #2a2a30 75%);\n	background-size: 16px 16px;\n	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;\n}\n#ptr_viewport canvas.dragging { cursor: grabbing; }\n#ptr_overlay {\n	position: absolute; left: 8px; top: 8px; pointer-events: none;\n	font-size: 11px; color: #fff; text-shadow: 0 1px 3px #000;\n	background: rgba(0,0,0,0.45); padding: 3px 7px; border-radius: 3px;\n}\n#ptr_watermark {\n	position: absolute; left: 12px; bottom: 10px; pointer-events: none;\n	font-family: sans-serif; line-height: 1; white-space: nowrap;\n	text-shadow: 0 1px 3px rgba(0,0,0,0.6);\n}\n#ptr_sidebar {\n	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;\n	background: var(--color-ui); border-left: 1px solid var(--color-border);\n}\n.ptr_tabs {\n	flex: 0 0 42px; display: flex; flex-direction: column; align-items: stretch;\n	padding: 6px 0; gap: 2px; background: var(--color-back);\n	border-right: 1px solid var(--color-border); overflow-y: auto;\n}\n.ptr_tab {\n	width: 100%; min-width: 0; height: 38px; display: flex; align-items: center; justify-content: center;\n	background: transparent; border: none; cursor: pointer; position: relative;\n	color: var(--color-subtle_text); padding: 0; box-shadow: none;\n}\n.ptr_tab .material-icons { font-size: 19px; max-width: 19px; }\n.ptr_tab:hover { color: var(--color-text); background: var(--color-selected); }\n.ptr_tab.active { color: var(--color-light); background: var(--color-selected); }\n.ptr_tab.active::before {\n	content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;\n	background: var(--color-accent); border-radius: 0 2px 2px 0;\n}\n.ptr_tabpanes { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 10px; min-width: 0; }\n.ptr_tabpane { display: none; }\n.ptr_tabpane.active { display: block; }\n.ptr_card {\n	background: var(--color-back); border: 1px solid var(--color-border);\n	border-radius: 6px; padding: 9px 10px 10px; margin-bottom: 10px;\n}\n.ptr_card_head {\n	display: flex; align-items: center; gap: 6px; margin-bottom: 7px;\n	font-size: 12px; font-weight: 600; color: var(--color-light);\n}\n.ptr_card_head .material-icons { font-size: 16px; max-width: 16px; opacity: 0.85; }\n.ptr_row {\n	display: flex; align-items: center; gap: 6px; margin: 5px 0; min-height: 22px;\n}\n.ptr_row > label { flex: 0 0 96px; font-size: 12px; color: var(--color-text); }\n.ptr_row > .ptr_ctrl { flex: 1 1 auto; display: flex; align-items: center; gap: 5px; min-width: 0; }\n.ptr_row input[type=range] { flex: 1 1 auto; min-width: 40px; }\n.ptr_row input[type=number] {\n	width: 56px; flex: 0 0 56px; background: var(--color-ui);\n	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;\n	padding: 1px 3px; font-size: 11px;\n}\n.ptr_row input[type=color] { width: 32px; height: 20px; padding: 0; border: 1px solid var(--color-border); background: none; border-radius: 3px; }\n.ptr_row input[type=text] {\n	flex: 1 1 auto; min-width: 0; background: var(--color-ui);\n	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;\n	padding: 2px 6px; font-size: 12px;\n}\n.ptr_row select {\n	flex: 1 1 auto; min-width: 0; background: var(--color-ui); color: var(--color-text);\n	border: 1px solid var(--color-border); border-radius: 3px; padding: 2px; font-size: 12px;\n}\n.ptr_note { font-size: 11px; color: var(--color-subtle_text); margin: 4px 2px 2px; line-height: 1.4; }\n#ptr_footer {\n	display: flex; align-items: center; gap: 4px; padding: 6px 8px;\n	border-top: 1px solid var(--color-border); background: var(--color-ui);\n}\n#ptr_progress { flex: 1 1 auto; height: 6px; background: var(--color-back); border-radius: 3px; overflow: hidden; margin: 0 8px; }\n#ptr_progress > div { height: 100%; width: 0%; background: var(--color-accent); transition: width .1s linear; }\n#ptr_status { font-size: 11px; color: var(--color-subtle_text); white-space: nowrap; }\n.ptr_btn {\n	background: var(--color-button); color: var(--color-text); border: 1px solid var(--color-border);\n	border-radius: 4px; padding: 4px 11px; cursor: pointer; font-size: 12px; white-space: nowrap;\n	display: inline-flex; align-items: center; gap: 5px;\n}\n.ptr_btn .material-icons { font-size: 15px; max-width: 15px; }\n.ptr_btn:hover { background: var(--color-selected); }\n.ptr_btn.accent { background: var(--color-accent); color: var(--color-accent_text); border-color: var(--color-accent); }\n.ptr_iconbtn {\n	width: 27px; min-width: 0; height: 27px; flex: 0 0 27px; display: flex; align-items: center; justify-content: center;\n	background: transparent; color: var(--color-text); border: 1px solid transparent;\n	border-radius: 4px; cursor: pointer; padding: 0; box-shadow: none;\n}\n.ptr_iconbtn .material-icons { font-size: 17px; max-width: 17px; }\n.ptr_iconbtn:hover { background: var(--color-selected); border-color: var(--color-border); }\n.ptr_presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }\n.ptr_presets .ptr_btn { padding: 2px 7px; font-size: 11px; }\n.ptr_dialog_root .dialog_content { margin: 0 !important; padding: 0 !important; overflow: hidden !important; height: 100% !important; max-height: none !important; box-sizing: border-box; }\n.ptr_dialog_root .dialog_wrapper { min-height: 0; }\n.ptr_dialog_root .dialog_handle { cursor: move; }\n#ptr_matlist { margin-top: 4px; }\n.ptr_mat {\n	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;\n	background: var(--color-ui);\n}\n.ptr_mat > .ptr_mat_head { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 3px; font-weight: 600; }\n.ptr_mat > .ptr_mat_head img { width: 20px; height: 20px; image-rendering: pixelated; background: #0006; border-radius: 3px; }\n";
+  var georenderer_default = "\n#ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }\n#ptr_root * { box-sizing: border-box; }\n#ptr_step_nav { display: flex; gap: 6px; padding: 9px 12px; background: var(--color-ui); border-bottom: 1px solid var(--color-border); }\n.ptr_step { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 5px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-back); color: var(--color-text); cursor: pointer; font-size: 12px; }\n.ptr_step:hover { background: var(--color-selected); }\n.ptr_step.active { border-color: var(--color-accent); color: var(--color-light); box-shadow: inset 0 -2px var(--color-accent); }\n.ptr_step_number { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: var(--color-selected); font-weight: 700; }\n.ptr_step.active .ptr_step_number { background: var(--color-accent); color: var(--color-accent_text); }\n#ptr_viewport {\n	flex: 1 1 auto; position: relative; background: #101014;\n	display: flex; align-items: center; justify-content: center; overflow: hidden;\n	min-width: 240px;\n}\n#ptr_frame { position: relative; flex: 0 0 auto; background: #20242b; overflow: hidden; }\n#ptr_frame canvas {\n	width: 100%; height: 100%; object-fit: contain;\n	image-rendering: auto; cursor: grab;\n	background-image: linear-gradient(45deg, #2a2a30 25%, transparent 25%),\n		linear-gradient(-45deg, #2a2a30 25%, transparent 25%),\n		linear-gradient(45deg, transparent 75%, #2a2a30 75%),\n		linear-gradient(-45deg, transparent 75%, #2a2a30 75%);\n	background-size: 16px 16px;\n	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;\n}\n#ptr_raster_canvas { position: absolute; inset: 0; }\n#ptr_canvas { position: absolute; inset: 0; }\n#ptr_viewport canvas.dragging { cursor: grabbing; }\n#ptr_overlay {\n	position: absolute; left: 8px; top: 8px; pointer-events: none;\n	font-size: 11px; color: #fff; text-shadow: 0 1px 3px #000;\n	background: rgba(0,0,0,0.45); padding: 3px 7px; border-radius: 3px;\n}\n#ptr_watermark {\n	position: absolute; left: 12px; bottom: 10px; pointer-events: none;\n	font-family: sans-serif; line-height: 1; white-space: nowrap;\n	text-shadow: 0 1px 3px rgba(0,0,0,0.6);\n}\n#ptr_sidebar {\n	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;\n	background: var(--color-ui); border-left: 1px solid var(--color-border);\n}\n.ptr_stagepanes { flex: 1 1 auto; overflow-y: auto; padding: 10px; min-width: 0; }\n.ptr_stagepane[hidden] { display: none; }\n.ptr_tabs {\n	flex: 0 0 42px; display: flex; flex-direction: column; align-items: stretch;\n	padding: 6px 0; gap: 2px; background: var(--color-back);\n	border-right: 1px solid var(--color-border); overflow-y: auto;\n}\n.ptr_tab {\n	width: 100%; min-width: 0; height: 38px; display: flex; align-items: center; justify-content: center;\n	background: transparent; border: none; cursor: pointer; position: relative;\n	color: var(--color-subtle_text); padding: 0; box-shadow: none;\n}\n.ptr_tab .material-icons { font-size: 19px; max-width: 19px; }\n.ptr_tab:hover { color: var(--color-text); background: var(--color-selected); }\n.ptr_tab.active { color: var(--color-light); background: var(--color-selected); }\n.ptr_tab.active::before {\n	content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;\n	background: var(--color-accent); border-radius: 0 2px 2px 0;\n}\n.ptr_tabpanes { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 10px; min-width: 0; }\n.ptr_tabpane { display: none; }\n.ptr_tabpane.active { display: block; }\n.ptr_card {\n	background: var(--color-back); border: 1px solid var(--color-border);\n	border-radius: 6px; padding: 9px 10px 10px; margin-bottom: 10px;\n}\n.ptr_card_head {\n	display: flex; align-items: center; gap: 6px; margin-bottom: 7px;\n	font-size: 12px; font-weight: 600; color: var(--color-light);\n}\n.ptr_card_head .material-icons { font-size: 16px; max-width: 16px; opacity: 0.85; }\n.ptr_row {\n	display: flex; align-items: center; gap: 6px; margin: 5px 0; min-height: 22px;\n}\n.ptr_row > label { flex: 0 0 96px; font-size: 12px; color: var(--color-text); }\n.ptr_row > .ptr_ctrl { flex: 1 1 auto; display: flex; align-items: center; gap: 5px; min-width: 0; }\n.ptr_row input[type=range] { flex: 1 1 auto; min-width: 40px; }\n.ptr_row input[type=number] {\n	width: 56px; flex: 0 0 56px; background: var(--color-ui);\n	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;\n	padding: 1px 3px; font-size: 11px;\n}\n.ptr_row input[type=color] { width: 32px; height: 20px; padding: 0; border: 1px solid var(--color-border); background: none; border-radius: 3px; }\n.ptr_row input[type=text] {\n	flex: 1 1 auto; min-width: 0; background: var(--color-ui);\n	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;\n	padding: 2px 6px; font-size: 12px;\n}\n.ptr_row select {\n	flex: 1 1 auto; min-width: 0; background: var(--color-ui); color: var(--color-text);\n	border: 1px solid var(--color-border); border-radius: 3px; padding: 2px; font-size: 12px;\n}\n.ptr_note { font-size: 11px; color: var(--color-subtle_text); margin: 4px 2px 2px; line-height: 1.4; }\n#ptr_footer {\n	display: flex; align-items: center; gap: 4px; padding: 6px 8px;\n	border-top: 1px solid var(--color-border); background: var(--color-ui);\n}\n#ptr_progress { flex: 1 1 auto; height: 6px; background: var(--color-back); border-radius: 3px; overflow: hidden; margin: 0 8px; }\n#ptr_progress > div { height: 100%; width: 0%; background: var(--color-accent); transition: width .1s linear; }\n#ptr_status { font-size: 11px; color: var(--color-subtle_text); white-space: nowrap; }\n.ptr_btn {\n	background: var(--color-button); color: var(--color-text); border: 1px solid var(--color-border);\n	border-radius: 4px; padding: 4px 11px; cursor: pointer; font-size: 12px; white-space: nowrap;\n	display: inline-flex; align-items: center; gap: 5px;\n}\n.ptr_btn .material-icons { font-size: 15px; max-width: 15px; }\n.ptr_btn:hover { background: var(--color-selected); }\n.ptr_btn.accent { background: var(--color-accent); color: var(--color-accent_text); border-color: var(--color-accent); }\n.ptr_iconbtn {\n	width: 27px; min-width: 0; height: 27px; flex: 0 0 27px; display: flex; align-items: center; justify-content: center;\n	background: transparent; color: var(--color-text); border: 1px solid transparent;\n	border-radius: 4px; cursor: pointer; padding: 0; box-shadow: none;\n}\n.ptr_iconbtn .material-icons { font-size: 17px; max-width: 17px; }\n.ptr_iconbtn:hover { background: var(--color-selected); border-color: var(--color-border); }\n.ptr_presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }\n.ptr_presets .ptr_btn { padding: 2px 7px; font-size: 11px; }\n.ptr_dialog_root .dialog_content { margin: 0 !important; padding: 0 !important; overflow: hidden !important; height: 100% !important; max-height: none !important; box-sizing: border-box; }\n.ptr_dialog_root .dialog_wrapper { min-height: 0; }\n.ptr_dialog_root .dialog_handle { cursor: move; }\n#ptr_matlist { margin-top: 4px; }\n.ptr_mat {\n	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;\n	background: var(--color-ui);\n}\n.ptr_mat > .ptr_mat_head { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 3px; font-weight: 600; }\n.ptr_mat > .ptr_mat_head img { width: 20px; height: 20px; image-rendering: pixelated; background: #0006; border-radius: 3px; }\n";
 
   // plugins/georenderer/src/index.js
   var action = null;
@@ -3170,7 +3378,7 @@
       }
     },
     onunload() {
-      closeRenderer();
+      closeWindow();
       if (PTR.dialog) {
         try {
           PTR.dialog.delete();

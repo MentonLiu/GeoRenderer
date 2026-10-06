@@ -1,6 +1,5 @@
 import { clamp } from '../core/math.js';
 import { PathTracer } from '../gpu/path-tracer.js';
-import { syncControls } from './controls.js';
 import { el } from './dom.js';
 import { saveImage } from './io.js';
 import { buildMaterialList } from './material-panel.js';
@@ -8,6 +7,8 @@ import { applyResolution, closeRenderer, loop, rebuildScene, setInteracting, sho
 import { exportSettingsToClipboard, importSettingsFromClipboard, resetToDefaults } from './settings-actions.js';
 import { buildSidebar } from './sidebar.js';
 import { PTR, saveSettings } from './state.js';
+import { RasterPreview } from './raster-preview.js';
+import { STEPS, isTraceStep, stepIndex } from './workflow-state.js';
 
 function attachViewportEvents(canvas) {
 	let dragging = 0;
@@ -53,11 +54,24 @@ function attachViewportEvents(canvas) {
 
 function buildWindow() {
 	const canvas = el('canvas', { id: 'ptr_canvas' });
+	const rasterCanvas = el('canvas', { id: 'ptr_raster_canvas' });
 	const overlay = el('div', { id: 'ptr_overlay', text: '准备中（首次加载可能会较为卡顿）…' });
 	const watermark = el('div', { id: 'ptr_watermark' });
-	const viewport = el('div', { id: 'ptr_viewport' }, [canvas, overlay, watermark]);
+	const frame = el('div', { id: 'ptr_frame' }, [rasterCanvas, canvas, overlay, watermark]);
+	const viewport = el('div', { id: 'ptr_viewport' }, [frame]);
 	const sidebar = buildSidebar();
 	const root = el('div', { id: 'ptr_root' }, [viewport, sidebar]);
+	const nav = el('nav', { id: 'ptr_step_nav', 'aria-label': '渲染流程' });
+	PTR.nodes.navButtons = {};
+	for (const [index, step] of STEPS.entries()) {
+		const button = el('button', { type: 'button', class: 'ptr_step', title: step.label }, [
+			el('span', { class: 'ptr_step_number', text: String(index + 1) }),
+			el('span', { text: step.label }),
+		]);
+		button.addEventListener('click', () => setStep(step.id));
+		PTR.nodes.navButtons[step.id] = button;
+		nav.appendChild(button);
+	}
 
 	const bar = el('div');
 	const progress = el('div', { id: 'ptr_progress' }, [bar]);
@@ -74,28 +88,8 @@ function buildWindow() {
 		updateStatus();
 	});
 
-	const btnModeLabel = el('span', { text: '切换到成片渲染' });
-	const btnMode = el('button', { class: 'ptr_btn' }, [btnModeLabel]);
-	btnMode.addEventListener('click', () => {
-		PTR.settings.render_mode = PTR.settings.render_mode === 'final' ? 'preview' : 'final';
-		syncControls();
-		saveSettings();
-		updateModeButton();
-		if (PTR.paused) {
-			PTR.paused = false;
-			btnPauseIcon.textContent = 'pause';
-			btnPauseLabel.textContent = '暂停';
-			PTR.lastFrame = performance.now();
-		}
-		updateStatus();
-	});
-	function updateModeButton() {
-		const isFinal = PTR.settings.render_mode === 'final';
-		btnModeLabel.textContent = isFinal ? '切换到预览' : '切换到成片渲染';
-		btnMode.classList.toggle('accent', isFinal);
-	}
-	updateModeButton();
-	PTR.updateModeButton = updateModeButton;
+	const btnStart = el('button', { class: 'ptr_btn accent', text: '开始最终渲染' });
+	btnStart.addEventListener('click', startFinal);
 
 	const iconBtn = (icon, title, onClick) => {
 		const b = el('button', { class: 'ptr_iconbtn', title: title }, [el('i', { class: 'material-icons', text: icon })]);
@@ -117,20 +111,91 @@ function buildWindow() {
 	]);
 
 	const footer = el('div', { id: 'ptr_footer' }, [
-		status, progress, btnMode, btnPause, toolGroup, btnSave,
+		status, progress, btnStart, btnPause, toolGroup, btnSave,
 	]);
 
 	const wrapper = el('div', {
 		style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: '420px' },
-	}, [root, footer]);
+	}, [nav, root, footer]);
 
 	PTR.nodes = Object.assign(PTR.nodes || {}, {
-		canvas: canvas, overlay: overlay, viewport: viewport, sidebar: sidebar,
+		canvas: canvas, rasterCanvas: rasterCanvas, frame: frame,
+		overlay: overlay, viewport: viewport, sidebar: sidebar,
 		status: status, bar: bar, wrapper: wrapper, btnPause: btnPause, watermark: watermark,
+		btnStart: btnStart, btnSave: btnSave, toolGroup: toolGroup, footer: footer,
 	});
 	root.style.flex = '1 1 auto';
 	root.style.minHeight = '0';
+	attachViewportEvents(canvas);
+	attachViewportEvents(rasterCanvas);
 	return wrapper;
+}
+
+function fitFrame() {
+	const frame = PTR.nodes.frame;
+	const viewport = PTR.nodes.viewport;
+	if (!frame || !viewport) return;
+	const width = viewport.clientWidth;
+	const height = viewport.clientHeight;
+	if (!width || !height) return;
+	const aspect = Math.max(0.1, PTR.settings.res_width / Math.max(1, PTR.settings.res_height));
+	const w = Math.min(width, height * aspect);
+	frame.style.width = Math.floor(w) + 'px';
+	frame.style.height = Math.floor(w / aspect) + 'px';
+}
+
+export function setStep(id) {
+	if (stepIndex(id) < 0 || !PTR.dialog) return;
+	const wasTrace = isTraceStep(PTR.step);
+	PTR.step = id;
+	for (const step of STEPS) {
+		const active = step.id === id;
+		PTR.nodes.navButtons[step.id].classList.toggle('active', active);
+		PTR.nodes.navButtons[step.id].setAttribute('aria-current', active ? 'step' : 'false');
+		PTR.nodes.stagePanes[step.id].hidden = !active;
+	}
+	const trace = isTraceStep(id);
+	PTR.nodes.canvas.style.display = trace ? 'block' : 'none';
+	PTR.nodes.rasterCanvas.style.display = trace ? 'none' : 'block';
+	PTR.nodes.overlay.style.display = trace ? '' : 'none';
+	PTR.nodes.watermark.style.display = trace ? '' : 'none';
+	PTR.nodes.footer.style.display = trace ? 'flex' : 'none';
+	PTR.nodes.btnStart.style.display = id === 'export' ? '' : 'none';
+	PTR.nodes.btnSave.style.display = id === 'export' && PTR.finalStarted ? '' : 'none';
+	PTR.nodes.btnPause.style.display = id === 'preview' || PTR.finalStarted ? '' : 'none';
+	PTR.nodes.toolGroup.style.display = id === 'preview' ? 'flex' : 'none';
+	if (trace) {
+		if (PTR.raster) PTR.raster.stop();
+		if (!PTR.tracer) {
+			PTR.settings.render_mode = 'preview';
+			PTR.finalStarted = false;
+			try { startRenderer(); } catch (err) { showError(err); }
+		} else if (id === 'preview' && PTR.settings.render_mode !== 'preview') {
+			PTR.settings.render_mode = 'preview';
+			PTR.tracer.reset();
+			PTR.finalStarted = false;
+		}
+		if (PTR.tracer) applyResolution();
+	} else {
+		if (wasTrace && PTR.tracer) closeRenderer();
+		PTR.finalStarted = false;
+		if (PTR.raster) PTR.raster.start();
+	}
+	fitFrame();
+	if (trace && PTR.tracer) applyResolution();
+	saveSettings();
+}
+
+function startFinal() {
+	if (PTR.step !== 'export' || !PTR.tracer) return;
+	PTR.finalStarted = true;
+	PTR.settings.render_mode = 'final';
+	PTR.paused = false;
+	PTR.tracer.reset();
+	PTR.lastFrame = performance.now();
+	PTR.nodes.btnSave.style.display = '';
+	updateStatus();
+	saveSettings();
 }
 
 function startRenderer() {
@@ -161,8 +226,6 @@ function startRenderer() {
 		PTR.resizeObs.observe(PTR.nodes.viewport);
 	}
 
-	attachViewportEvents(PTR.nodes.canvas);
-
 	PTR.open = true;
 	PTR.paused = false;
 	PTR.lastFrame = performance.now();
@@ -173,7 +236,7 @@ function startRenderer() {
 export function openWindow() {
 	if (typeof Dialog === 'undefined') return;
 	if (PTR.dialog) {
-		closeRenderer();
+		closeWindow();
 		try { PTR.dialog.hide(); } catch (e) { }
 		try { PTR.dialog.delete(); } catch (e) { }
 		PTR.dialog = null;
@@ -187,7 +250,7 @@ export function openWindow() {
 		cancel_on_click_outside: false,
 		buttons: [],
 		lines: [content],
-		onCancel() { closeRenderer(); },
+		onCancel() { closeWindow(); },
 		onResize() {
 			clearTimeout(PTR.interactTimer);
 			setInteracting(true);
@@ -203,7 +266,17 @@ export function openWindow() {
 	setTimeout(() => {
 		try {
 			if (PTR.dialog && PTR.dialog.object) PTR.dialog.object.classList.add('ptr_dialog_root');
-			startRenderer();
+			PTR.step = 'camera';
+			PTR.finalStarted = false;
+			PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
+			PTR.onSettingChanged = key => {
+				if (key === 'res_width' || key === 'res_height') fitFrame();
+				if (key === 'fov') PTR.cam.fov = PTR.settings.fov;
+				if (key === 'ortho') PTR.cam.ortho = !!PTR.settings.ortho;
+			};
+			PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
+			PTR.frameResizeObs.observe(PTR.nodes.viewport);
+			setStep('camera');
 		} catch (err) {
 			showError(err);
 			if (PTR.nodes.overlay) {
@@ -211,4 +284,11 @@ export function openWindow() {
 			}
 		}
 	}, 60);
+}
+
+export function closeWindow() {
+	closeRenderer();
+	if (PTR.raster) { PTR.raster.dispose(); PTR.raster = null; }
+	if (PTR.frameResizeObs) { PTR.frameResizeObs.disconnect(); PTR.frameResizeObs = null; }
+	PTR.onSettingChanged = null;
 }

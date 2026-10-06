@@ -17,7 +17,7 @@ export const INTERACTIVE_PASS_CAP = 8;
 export const IDLE_PASS_CAP = 64;
 
 export const DEFAULTS = {
-	res_mode: 'fit',
+	res_mode: 'custom',
 	res_width: 1280,
 	res_height: 720,
 	render_mode: 'preview',
