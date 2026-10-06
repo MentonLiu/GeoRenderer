@@ -3546,6 +3546,9 @@
       );
       this.ground.rotation.x = -Math.PI / 2;
       this.ground.receiveShadow = true;
+      this.groundDisk = new THREE.Mesh(new THREE.CircleGeometry(1, 64), this.ground.material);
+      this.groundDisk.rotation.x = -Math.PI / 2;
+      this.groundDisk.receiveShadow = true;
       this.groundMap = null;
       this.groundTextureUuid = null;
       this.environmentSource = null;
@@ -3559,7 +3562,7 @@
       this.scene = scene;
       this.originalBackground = scene.background;
       this.originalEnvironment = scene.environment;
-      scene.add(this.ambient, this.sun, this.ground);
+      scene.add(this.ambient, this.sun, this.ground, this.groundDisk);
       this.refresh();
     }
     refresh() {
@@ -3572,8 +3575,11 @@
       this.sun.intensity = Math.max(0, s.sun_intensity / 4);
       this.sun.color.set(s.sun_color);
       this.sun.position.set(direction[0] * 100, direction[1] * 100, direction[2] * 100);
-      this.ground.visible = !!s.ground_on;
+      this.ground.visible = !!s.ground_on && !(s.ground_radius > 0);
+      this.groundDisk.visible = !!s.ground_on && s.ground_radius > 0;
       this.ground.position.y = s.ground_y;
+      this.groundDisk.position.y = s.ground_y;
+      if (this.groundDisk.visible) this.groundDisk.scale.setScalar(s.ground_radius);
       this.ground.material.color.set(s.ground_color);
       this.ground.material.roughness = s.ground_rough;
       this.ground.material.metalness = s.ground_metal;
@@ -3581,7 +3587,7 @@
       this.ground.material.opacity = s.ground_catcher ? 0.25 : 1;
       this.updateGroundTexture(s.ground_texture_uuid);
       if (this.groundMap) {
-        const repeat = 2e3 / Math.max(0.01, s.ground_texture_scale || 1);
+        const repeat = (s.ground_radius > 0 ? s.ground_radius * 2 : 2e3) / Math.max(0.01, s.ground_texture_scale || 1);
         this.groundMap.repeat.set(repeat, repeat);
       }
       const environment = s.env_mode === "image" ? PTR.sceneCubemap || this.getEnvironmentTexture() : null;
@@ -3651,7 +3657,7 @@
       if (!this.scene) return;
       if (this.scene.background === this.appliedBackground) this.scene.background = this.originalBackground;
       if (this.scene.environment === this.appliedEnvironment) this.scene.environment = this.originalEnvironment;
-      this.scene.remove(this.ambient, this.sun, this.ground);
+      this.scene.remove(this.ambient, this.sun, this.ground, this.groundDisk);
       this.scene = null;
       cancelAnimationFrame(this.renderRequest);
       this.renderRequest = 0;
@@ -3662,6 +3668,7 @@
     dispose() {
       this.deactivate();
       this.ground.geometry.dispose();
+      this.groundDisk.geometry.dispose();
       this.ground.material.dispose();
       if (this.groundMap) this.groundMap.dispose();
       if (this.environmentTexture) this.environmentTexture.dispose();
