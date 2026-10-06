@@ -25,6 +25,9 @@
 }
 #ptr_raster_canvas { position: absolute; inset: 0; }
 #ptr_canvas { position: absolute; inset: 0; }
+#ptr_frame[data-step="materials"] #ptr_raster_canvas { cursor: pointer; }
+#ptr_frame[data-step="preview"] #ptr_canvas,
+#ptr_frame[data-step="export"] #ptr_canvas { cursor: default; }
 #ptr_viewport canvas.dragging { cursor: grabbing; }
 #ptr_overlay {
 	position: absolute; left: 8px; top: 8px; pointer-events: none;
@@ -125,6 +128,17 @@
 .ptr_dialog_root .dialog_wrapper { min-height: 0; }
 .ptr_dialog_root .dialog_handle { cursor: move; }
 #ptr_matlist { margin-top: 4px; }
+.ptr_outline { max-height: 280px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 3px; background: var(--color-ui); }
+.ptr_outline_row { display: flex; align-items: stretch; min-height: 25px; }
+.ptr_outline_disclosure { flex: 0 0 19px; width: 19px; border: 0; background: transparent; color: var(--color-text); cursor: pointer; padding: 0; }
+.ptr_outline_item { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; padding: 2px 5px; font-size: 12px; }
+.ptr_outline_item > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ptr_outline_item .material-icons { font-size: 15px; width: 17px; flex: 0 0 17px; color: var(--color-subtle_text); }
+.ptr_outline_item:hover, .ptr_outline_item.selected { background: var(--color-selected); }
+.ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
+.ptr_outline_element { opacity: 0.7; }
+.ptr_group_inspector { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--color-border); }
+.ptr_group_inspector_head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 6px; font-size: 12px; }
 .ptr_mat {
 	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;
 	background: var(--color-ui);

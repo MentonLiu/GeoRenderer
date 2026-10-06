@@ -2,13 +2,14 @@ import { PLUGIN_ID } from './core/config.js';
 import { rebuildScene, updateStatus } from './ui/render-loop.js';
 import { PTR, loadSettings } from './ui/state.js';
 import { closeWindow, openWindow } from './ui/window.js';
-import { buildGroupList } from './ui/group-panel.js';
+import { buildGroupList, selectGroup } from './ui/group-panel.js';
 import { buildMaterialList } from './ui/material-panel.js';
 import CSS from './assets/georenderer.css';
 
 let action = null;
 let cssHandle = null;
 let eventHandler = null;
+let selectionHandler = null;
 
 Plugin.register(PLUGIN_ID, {
 	title: 'GeoRenderer',
@@ -65,6 +66,10 @@ Plugin.register(PLUGIN_ID, {
 			Blockbench.on('finished_edit', eventHandler);
 			Blockbench.on('undo', eventHandler);
 			Blockbench.on('redo', eventHandler);
+			selectionHandler = () => {
+				if (PTR.nodes.groupList && typeof Group !== 'undefined' && Group.first_selected) selectGroup(Group.first_selected.uuid);
+			};
+			Blockbench.on('update_selection', selectionHandler);
 		} catch (err) { }
 	},
 
@@ -81,6 +86,10 @@ Plugin.register(PLUGIN_ID, {
 				Blockbench.removeListener('redo', eventHandler);
 			} catch (err) { }
 			eventHandler = null;
+		}
+		if (selectionHandler) {
+			try { Blockbench.removeListener('update_selection', selectionHandler); } catch (err) { }
+			selectionHandler = null;
 		}
 	},
 });

@@ -4,18 +4,20 @@ import { syncControls } from './controls.js';
 import { el } from './dom.js';
 import { copyImage, openBlockbenchScreenshot, saveImage } from './io.js';
 import { buildMaterialList } from './material-panel.js';
+import { selectGroup } from './group-panel.js';
 import { applyResolution, closeRenderer, loop, pauseRenderer, rebuildScene, resumeRenderer, setInteracting, showError, updateStatus } from './render-loop.js';
 import { exportSettingsToClipboard, importSettingsFromClipboard, resetToDefaults } from './settings-actions.js';
 import { buildSidebar } from './sidebar.js';
 import { PTR, saveSettings } from './state.js';
 import { RasterPreview } from './raster-preview.js';
 import { applyTimeOfDay, formatClock } from '../scene/presets.js';
-import { STEPS, canExport, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from './workflow-state.js';
+import { STEPS, canExport, canMoveCamera, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from './workflow-state.js';
 import { updateExportSummary } from './export-panel.js';
 
 function attachViewportEvents(canvas) {
 	let dragging = 0;
 	let lastX = 0, lastY = 0;
+	let startX = 0, startY = 0, moved = false;
 
 	const endDrag = () => {
 		dragging = 0;
@@ -25,16 +27,19 @@ function attachViewportEvents(canvas) {
 	};
 
 	canvas.addEventListener('pointerdown', e => {
+		if (!canMoveCamera(PTR.step) || e.button > 2) return;
 		dragging = (e.button === 0 && !e.shiftKey && !e.ctrlKey) ? 1 : 2;
-		lastX = e.clientX; lastY = e.clientY;
+		lastX = startX = e.clientX; lastY = startY = e.clientY; moved = false;
 		canvas.setPointerCapture(e.pointerId);
-		canvas.classList.add('dragging');
-		clearTimeout(PTR.interactTimer);
-		setInteracting(true);
 		e.preventDefault();
 	});
 	canvas.addEventListener('pointermove', e => {
 		if (!dragging) return;
+		if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) moved = true;
+		if (!moved) return;
+		canvas.classList.add('dragging');
+		clearTimeout(PTR.interactTimer);
+		setInteracting(true);
 		const dx = e.clientX - lastX;
 		const dy = e.clientY - lastY;
 		lastX = e.clientX; lastY = e.clientY;
@@ -42,11 +47,18 @@ function attachViewportEvents(canvas) {
 		else PTR.cam.pan(dx / Math.max(canvas.clientWidth, 1), dy / Math.max(canvas.clientHeight, 1), 1);
 		if (PTR.tracer) PTR.tracer.reset();
 	});
-	canvas.addEventListener('pointerup', e => { endDrag(); try { canvas.releasePointerCapture(e.pointerId); } catch (err) { } });
+	canvas.addEventListener('pointerup', e => {
+		if (dragging === 1 && !moved && canvas === PTR.nodes.rasterCanvas && PTR.step === 'materials' && PTR.raster) {
+			selectGroup(PTR.raster.pickGroup(e.clientX, e.clientY));
+		}
+		endDrag();
+		try { canvas.releasePointerCapture(e.pointerId); } catch (err) { }
+	});
 	canvas.addEventListener('pointercancel', endDrag);
 	canvas.addEventListener('contextmenu', e => e.preventDefault());
 	canvas.addEventListener('wheel', e => {
 		e.preventDefault();
+		if (!canMoveCamera(PTR.step)) return;
 		PTR.cam.zoom(e.deltaY);
 		PTR.settings.camera_distance = PTR.cam.distance;
 		syncControls();
@@ -175,14 +187,19 @@ function updateExportActions() {
 export function setStep(id) {
 	if (stepIndex(id) < 0 || !PTR.dialog) return;
 	const wasTrace = isTraceStep(PTR.step);
+	const trace = isTraceStep(id);
+	if (trace && !wasTrace) {
+		PTR.lockedCamera = PTR.cam.state();
+		PTR.interacting = false;
+	}
 	PTR.step = id;
+	PTR.nodes.frame.dataset.step = id;
 	for (const step of STEPS) {
 		const active = step.id === id;
 		PTR.nodes.navButtons[step.id].classList.toggle('active', active);
 		PTR.nodes.navButtons[step.id].setAttribute('aria-current', active ? 'step' : 'false');
 		PTR.nodes.stagePanes[step.id].hidden = !active;
 	}
-	const trace = isTraceStep(id);
 	PTR.nodes.canvas.style.display = trace ? 'block' : 'none';
 	PTR.nodes.rasterCanvas.style.display = trace ? 'none' : 'block';
 	PTR.nodes.overlay.style.display = trace ? '' : 'none';
@@ -201,6 +218,7 @@ export function setStep(id) {
 			PTR.finalStarted = false;
 			try { startRenderer(); } catch (err) { showError(err); }
 		} else {
+			if (!wasTrace) PTR.tracer.setCamera(PTR.lockedCamera);
 			if (!PTR.open) resumeRenderer();
 			if (id === 'preview' || !PTR.finalStarted) {
 				if (PTR.settings.render_mode !== 'preview') PTR.tracer.reset();
@@ -259,7 +277,7 @@ function startRenderer() {
 		applyResolution();
 		tracer.setEnvironment(PTR.settings, PTR.customEnv);
 		rebuildScene();
-		tracer.setCamera(PTR.cam.state());
+		tracer.setCamera(PTR.lockedCamera || PTR.cam.state());
 		if (window.ResizeObserver) {
 			PTR.resizeObs = new ResizeObserver(() => {
 				if (PTR.settings.res_mode === 'fit') applyResolution();
@@ -315,9 +333,11 @@ export function openWindow() {
 	setTimeout(() => {
 		try {
 			if (PTR.dialog && PTR.dialog.object) PTR.dialog.object.classList.add('ptr_dialog_root');
-			PTR.step = 'camera';
+			PTR.step = 'materials';
 			PTR.finalStarted = false;
+			PTR.lockedCamera = null;
 			PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
+			if (typeof Group !== 'undefined' && Group.first_selected) selectGroup(Group.first_selected.uuid);
 			PTR.raster.setGroundTexture(((typeof Texture !== 'undefined' && Texture.all) || []).find(texture => texture.uuid === PTR.settings.ground_texture_uuid));
 			PTR.onSettingChanged = key => {
 				if (key === 'res_width' || key === 'res_height') fitFrame();
@@ -336,7 +356,7 @@ export function openWindow() {
 			PTR.onSettingsLoaded = syncSettingsToView;
 			PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
 			PTR.frameResizeObs.observe(PTR.nodes.viewport);
-			setStep('camera');
+			setStep('materials');
 		} catch (err) {
 			showError(err);
 			if (PTR.nodes.overlay) {
@@ -349,6 +369,7 @@ export function openWindow() {
 export function closeWindow() {
 	clearTimeout(PTR.interactTimer);
 	clearTimeout(PTR.rebuildTimer);
+	clearTimeout(PTR.rasterRefreshTimer);
 	closeRenderer();
 	if (PTR.raster) { PTR.raster.dispose(); PTR.raster = null; }
 	if (PTR.frameResizeObs) { PTR.frameResizeObs.disconnect(); PTR.frameResizeObs = null; }
@@ -358,6 +379,8 @@ export function closeWindow() {
 	PTR.needsRebuild = false;
 	PTR.refreshMaterialList = null;
 	PTR.refreshGroundTextures = null;
+	PTR.lockedCamera = null;
+	PTR.selectedGroupUuid = null;
 	PTR.controls = [];
 	PTR.nodes = {};
 }
