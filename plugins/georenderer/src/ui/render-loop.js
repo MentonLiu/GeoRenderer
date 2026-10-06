@@ -25,7 +25,7 @@ export function rebuildScene() {
 export function applyResolution() {
 	const t = PTR.tracer;
 	if (!t || !PTR.nodes.viewport) return;
-	const rect = PTR.nodes.viewport.getBoundingClientRect();
+	const rect = (PTR.nodes.frame || PTR.nodes.viewport).getBoundingClientRect();
 	let w, h;
 	if (PTR.settings.res_mode === 'custom') {
 		w = PTR.settings.res_width;

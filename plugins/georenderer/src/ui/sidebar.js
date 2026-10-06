@@ -1,4 +1,4 @@
-import { buildTabs, card, rowCheck, rowColor, rowNumber, rowSelect, rowSlider, rowText, syncControls } from './controls.js';
+import { buildStages, card, rowCheck, rowColor, rowNumber, rowSelect, rowSlider, rowText, syncControls } from './controls.js';
 import { el } from './dom.js';
 import { loadEnvFile } from './io.js';
 import { showError } from './render-loop.js';
@@ -40,12 +40,21 @@ export function buildSidebar() {
 			PTR.settings.fov = PTR.cam.fov;
 			PTR.settings.ortho = PTR.cam.ortho;
 			syncControls();
+			saveSettings();
 			if (PTR.tracer) PTR.tracer.reset();
 		}
 	});
 	const btnFrame = el('button', { class: 'ptr_btn', text: '框选模型' });
 	btnFrame.addEventListener('click', () => {
 		if (PTR.tracer && PTR.tracer.scene) PTR.cam.frameBounds(PTR.tracer.scene.bounds);
+		else if (PTR.raster && PTR.raster.model) {
+			const bounds = new THREE.Box3().setFromObject(PTR.raster.model);
+			if (!bounds.isEmpty()) {
+				const center = bounds.getCenter(new THREE.Vector3());
+				const size = bounds.getSize(new THREE.Vector3());
+				PTR.cam.frameBounds({ center: center.toArray(), radius: size.length() / 2 });
+			}
+		}
 		if (PTR.tracer) PTR.tracer.reset();
 	});
 	camBtns.appendChild(btnSync);
@@ -194,11 +203,12 @@ export function buildSidebar() {
 		]),
 	];
 
-	return buildTabs([
-		{ title: '渲染', icon: 'speed', cards: renderCards },
-		{ title: '相机', icon: 'videocam', cards: cameraCards },
-		{ title: '环境', icon: 'wb_sunny', cards: envCards },
-		{ title: '材质', icon: 'palette', cards: materialCards },
-		{ title: '后期', icon: 'tune', cards: postCards },
+	return buildStages([
+		{ id: 'camera', cards: [...cameraCards, ...materialCards] },
+		{ id: 'scene', cards: envCards },
+		{ id: 'preview', cards: [...renderCards, ...postCards] },
+		{ id: 'export', cards: [card('最终导出', 'save_alt', [
+			el('div', { class: 'ptr_note', text: '确认参数与画面后，点击下方“开始最终渲染”。' }),
+		])] },
 	]);
 }

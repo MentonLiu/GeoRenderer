@@ -1,7 +1,7 @@
 import { PLUGIN_ID } from './core/config.js';
-import { closeRenderer, rebuildScene, updateStatus } from './ui/render-loop.js';
+import { rebuildScene, updateStatus } from './ui/render-loop.js';
 import { PTR, loadSettings } from './ui/state.js';
-import { openWindow } from './ui/window.js';
+import { closeWindow, openWindow } from './ui/window.js';
 import CSS from './assets/georenderer.css';
 
 let action = null;
@@ -63,7 +63,7 @@ Plugin.register(PLUGIN_ID, {
 	},
 
 	onunload() {
-		closeRenderer();
+		closeWindow();
 		if (PTR.dialog) { try { PTR.dialog.delete(); } catch (e) { } PTR.dialog = null; }
 		if (action) { action.delete(); action = null; }
 		if (cssHandle && cssHandle.delete) cssHandle.delete();

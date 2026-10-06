@@ -101,32 +101,23 @@ export function card(title, icon, children) {
 	return el('div', { class: 'ptr_card' }, [head].concat(children));
 }
 
-export function buildTabs(tabs) {
+export function buildStages(stages) {
 	const wrap = el('div', { id: 'ptr_sidebar' });
-	const strip = el('div', { class: 'ptr_tabs' });
-	const panes = el('div', { class: 'ptr_tabpanes' });
-	tabs.forEach((tab, i) => {
-		const btn = el('button', { class: 'ptr_tab', title: tab.title }, [
-			el('i', { class: 'material-icons', text: tab.icon }),
-		]);
-		const pane = el('div', { class: 'ptr_tabpane' }, tab.cards);
-		btn.addEventListener('click', () => {
-			strip.querySelectorAll('.ptr_tab').forEach(b => b.classList.remove('active'));
-			panes.querySelectorAll('.ptr_tabpane').forEach(p => p.classList.remove('active'));
-			btn.classList.add('active');
-			pane.classList.add('active');
-		});
-		if (i === 0) { btn.classList.add('active'); pane.classList.add('active'); }
-		strip.appendChild(btn);
+	const panes = el('div', { class: 'ptr_stagepanes' });
+	PTR.nodes.stagePanes = {};
+	stages.forEach(stage => {
+		const pane = el('section', { class: 'ptr_stagepane', 'data-step': stage.id }, stage.cards);
+		pane.hidden = stage.id !== PTR.step;
+		PTR.nodes.stagePanes[stage.id] = pane;
 		panes.appendChild(pane);
 	});
-	wrap.appendChild(strip);
 	wrap.appendChild(panes);
 	return wrap;
 }
 
 function onSettingChanged(key) {
 	saveSettings();
+	if (PTR.onSettingChanged) PTR.onSettingChanged(key);
 	const kind = CHANGE_KIND[key] || 'reset';
 	const t = PTR.tracer;
 	if (!t) return;

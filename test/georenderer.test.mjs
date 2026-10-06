@@ -10,6 +10,7 @@ import { DEFAULTS } from '../plugins/georenderer/src/core/config.js';
 import { buildBVH } from '../plugins/georenderer/src/scene/bvh.js';
 import { packAtlas } from '../plugins/georenderer/src/scene/atlas.js';
 import { buildEnvDistribution, parseHDR } from '../plugins/georenderer/src/scene/environment.js';
+import { STEPS, isTraceStep, stepIndex } from '../plugins/georenderer/src/ui/workflow-state.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bundle = await readFile(path.join(root, 'plugins/georenderer/georenderer.js'), 'utf8');
@@ -80,6 +81,16 @@ test('registration and unload remove Blockbench resources', () => {
   assert.equal(actions[0].deleted, true);
   assert.equal(css[0].deleted, true);
   assert.equal(listeners.size, 0);
+});
+
+test('workflow exposes four ordered steps and keeps path tracing out of setup', () => {
+  assert.deepEqual(STEPS.map(step => step.id), ['camera', 'scene', 'preview', 'export']);
+  assert.equal(stepIndex('scene'), 1);
+  assert.equal(stepIndex('missing'), -1);
+  assert.equal(isTraceStep('camera'), false);
+  assert.equal(isTraceStep('scene'), false);
+  assert.equal(isTraceStep('preview'), true);
+  assert.equal(isTraceStep('export'), true);
 });
 
 test('Blockbench source modules have no circular or external imports', async () => {
