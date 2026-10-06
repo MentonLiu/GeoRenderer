@@ -10,9 +10,10 @@ import { DEFAULTS } from '../plugins/georenderer/src/core/config.js';
 import { buildBVH } from '../plugins/georenderer/src/scene/bvh.js';
 import { packAtlas } from '../plugins/georenderer/src/scene/atlas.js';
 import { buildEnvDistribution, generateSkyPixels, parseHDR } from '../plugins/georenderer/src/scene/environment.js';
-import { STEPS, canExport, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from '../plugins/georenderer/src/ui/workflow-state.js';
+import { STEPS, canExport, canMoveCamera, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from '../plugins/georenderer/src/ui/workflow-state.js';
 import { groupChainForElement, materialKey, resolveMaterialOverride } from '../plugins/georenderer/src/scene/group-overrides.js';
 import { applyPreset, applyTimeOfDay, formatClock } from '../plugins/georenderer/src/scene/presets.js';
+import { RasterPreview } from '../plugins/georenderer/src/ui/raster-preview.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bundle = await readFile(path.join(root, 'plugins/georenderer/georenderer.js'), 'utf8');
@@ -74,25 +75,48 @@ test('the original reference remains unchanged', async () => {
 test('registration and unload remove Blockbench resources', () => {
   const { plugin, listeners, actions, css } = loadPlugin();
   assert.equal(plugin.id, 'georenderer');
-  assert.equal(plugin.version, '2.0.0');
+  assert.equal(plugin.version, '2.1.0');
   plugin.onload();
   assert.equal(actions.length, 1);
   assert.equal(actions[0].id, 'georenderer_open');
-  assert.deepEqual([...listeners.keys()], ['finished_edit', 'undo', 'redo']);
+  assert.deepEqual([...listeners.keys()], ['finished_edit', 'undo', 'redo', 'update_selection']);
   plugin.onunload();
   assert.equal(actions[0].deleted, true);
   assert.equal(css[0].deleted, true);
   assert.equal(listeners.size, 0);
 });
 
-test('workflow exposes four ordered steps and keeps path tracing out of setup', () => {
-  assert.deepEqual(STEPS.map(step => step.id), ['camera', 'scene', 'preview', 'export']);
+test('workflow exposes five ordered steps and locks the camera during rendering', () => {
+  assert.deepEqual(STEPS.map(step => step.id), ['materials', 'scene', 'camera', 'preview', 'export']);
   assert.equal(stepIndex('scene'), 1);
+  assert.equal(stepIndex('camera'), 2);
   assert.equal(stepIndex('missing'), -1);
   assert.equal(isTraceStep('camera'), false);
   assert.equal(isTraceStep('scene'), false);
   assert.equal(isTraceStep('preview'), true);
   assert.equal(isTraceStep('export'), true);
+  assert.equal(canMoveCamera('materials'), true);
+  assert.equal(canMoveCamera('scene'), true);
+  assert.equal(canMoveCamera('camera'), true);
+  assert.equal(canMoveCamera('preview'), false);
+  assert.equal(canMoveCamera('export'), false);
+});
+
+test('raster preview click resolves the nearest owning group', t => {
+  const previousThree = globalThis.THREE;
+  globalThis.THREE = { Vector2: class { constructor(x, y) { this.x = x; this.y = y; } } };
+  t.after(() => { globalThis.THREE = previousThree; });
+  const raycaster = {
+    setFromCamera(point) { assert.equal(point.x, 0); assert.equal(point.y, 0); },
+    intersectObjects() { return [{ object: { visible: true, userData: { georendererGroupChain: ['child', 'parent'] } } }]; },
+  };
+  const preview = {
+    activeCamera: { updateMatrixWorld() {} },
+    canvas: { getBoundingClientRect() { return { left: 10, top: 20, width: 100, height: 100 }; } },
+    raycaster,
+    model: { children: [{}] },
+  };
+  assert.equal(RasterPreview.prototype.pickGroup.call(preview, 60, 70), 'child');
 });
 
 test('preview resolution is reduced until final render begins', () => {
