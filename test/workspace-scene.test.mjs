@@ -35,9 +35,10 @@ test('native workspace scene dressing updates with time and restores Blockbench 
 		AmbientLight: Light,
 		DirectionalLight: Light,
 		PlaneGeometry: class { dispose() {} },
+		CircleGeometry: class { dispose() {} },
 		MeshStandardMaterial: Material,
 		Mesh: class {
-			constructor(geometry, material) { this.geometry = geometry; this.material = material; this.rotation = {}; this.position = {}; }
+			constructor(geometry, material) { this.geometry = geometry; this.material = material; this.rotation = {}; this.position = {}; this.scale = { setScalar(value) { this.value = value; } }; }
 		},
 		DataTexture: class { constructor(data, width, height) { this.data = data; this.width = width; this.height = height; } dispose() {} },
 		RGBAFormat: 'rgba', EquirectangularReflectionMapping: 'equirect',
@@ -61,8 +62,12 @@ test('native workspace scene dressing updates with time and restores Blockbench 
 	PTR.sceneCubemap = null;
 	const adapter = new WorkspaceScene();
 	adapter.activate();
-	assert.equal(attached.size, 3);
+	assert.equal(attached.size, 4);
 	assert.equal(adapter.ground.visible, true);
+	PTR.settings.ground_radius = 8;
+	adapter.refresh();
+	assert.equal(adapter.groundDisk.visible, true);
+	assert.equal(adapter.groundDisk.scale.value, 8);
 	assert.notEqual(scene.background, originalBackground);
 	const noonLight = adapter.ambient.intensity;
 	PTR.settings.time_of_day = 0;
