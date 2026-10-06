@@ -21,6 +21,7 @@
     res_height: 720,
     render_mode: "preview",
     preview_samples: 8,
+    preview_scale: 0.5,
     final_samples: 256,
     max_bounce: 6,
     light_samples: 1,
@@ -272,6 +273,7 @@
     res_mode: "resize",
     res_width: "resize",
     res_height: "resize",
+    preview_scale: "resize",
     render_mode: "post",
     preview_samples: "post",
     final_samples: "post",
@@ -307,6 +309,7 @@
     rebuildTimer: 0,
     autoFollow: false,
     stale: false,
+    needsRebuild: false,
     lastPasses: 0,
     spsEma: 0
   };
@@ -338,6 +341,35 @@
     }
   }
 
+  // plugins/georenderer/src/ui/workflow-state.js
+  var STEPS = [
+    { id: "camera", label: "镜头与材质", icon: "videocam" },
+    { id: "scene", label: "场景", icon: "landscape" },
+    { id: "preview", label: "预览渲染", icon: "tune" },
+    { id: "export", label: "最终导出", icon: "save_alt" }
+  ];
+  function stepIndex(id) {
+    return STEPS.findIndex((step) => step.id === id);
+  }
+  function isTraceStep(id) {
+    return id === "preview" || id === "export";
+  }
+  function resolveRenderSize(settings2, step, finalStarted, viewport, interacting) {
+    let width = settings2.res_mode === "custom" ? settings2.res_width : Math.max(64, Math.floor(viewport.width));
+    let height = settings2.res_mode === "custom" ? settings2.res_height : Math.max(64, Math.floor(viewport.height));
+    if (step === "preview" || step === "export" && !finalStarted) {
+      const scale = Math.max(0.25, Math.min(1, settings2.preview_scale || 1));
+      width *= scale;
+      height *= scale;
+    }
+    if (interacting) {
+      const scale = Math.max(0.2, Math.min(1, settings2.interactive_scale || 1));
+      width *= scale;
+      height *= scale;
+    }
+    return { width: Math.max(8, Math.round(width)), height: Math.max(8, Math.round(height)) };
+  }
+
   // plugins/georenderer/src/ui/render-loop.js
   function showError(err) {
     console.error("[PathTracer]", err);
@@ -362,18 +394,9 @@
   }
   function applyResolution() {
     const t = PTR.tracer;
-    if (!t || !PTR.nodes.viewport) return;
+    if (!t || !PTR.open || !PTR.nodes.viewport) return;
     const rect = (PTR.nodes.frame || PTR.nodes.viewport).getBoundingClientRect();
-    let w, h;
-    if (PTR.settings.res_mode === "custom") {
-      w = PTR.settings.res_width;
-      h = PTR.settings.res_height;
-    } else {
-      w = Math.max(64, Math.floor(rect.width));
-      h = Math.max(64, Math.floor(rect.height));
-    }
-    const scale = PTR.interacting ? clamp(PTR.settings.interactive_scale, 0.2, 1) : 1;
-    const nw = Math.round(w * scale), nh = Math.round(h * scale);
+    const { width: nw, height: nh } = resolveRenderSize(PTR.settings, PTR.step, PTR.finalStarted, rect, PTR.interacting);
     if (nw !== t.width || nh !== t.height) {
       PTR.spsEma = 0;
       PTR.lastPasses = 0;
@@ -524,10 +547,20 @@
     }
     updateStatus();
   }
-  function closeRenderer() {
+  function pauseRenderer() {
     PTR.open = false;
     cancelAnimationFrame(PTR.raf);
     PTR.raf = 0;
+  }
+  function resumeRenderer() {
+    if (!PTR.tracer || PTR.open) return;
+    PTR.open = true;
+    PTR.paused = false;
+    PTR.lastFrame = performance.now();
+    loop();
+  }
+  function closeRenderer() {
+    pauseRenderer();
     if (PTR.resizeObs) {
       try {
         PTR.resizeObs.disconnect();
@@ -2376,6 +2409,10 @@
     const kind = CHANGE_KIND[key] || "reset";
     const t = PTR.tracer;
     if (!t) return;
+    if (!PTR.open) {
+      PTR.needsRebuild = true;
+      return;
+    }
     if (kind === "post") {
       t.present(PTR.settings);
       updateStatus();
@@ -2891,15 +2928,17 @@
   }
   function buildSidebar() {
     PTR.controls = [];
+    const resolutionCard = card("成片尺寸", "photo_size_select_large", [
+      rowSelect("分辨率", "res_mode", { fit: "自适应窗口", custom: "自定义" }),
+      rowNumber("宽度", "res_width", 32, 8192, 1),
+      rowNumber("高度", "res_height", 32, 8192, 1),
+      el("div", { class: "ptr_note", text: "画面左侧按最终长宽比取景；最终渲染使用这里的尺寸。" })
+    ]);
     const renderCards = [
-      card("分辨率与采样", "photo_size_select_large", [
-        rowSelect("分辨率", "res_mode", { fit: "自适应窗口", custom: "自定义" }),
-        rowNumber("宽度", "res_width", 32, 8192, 1),
-        rowNumber("高度", "res_height", 32, 8192, 1),
-        rowSelect("当前模式", "render_mode", { preview: "预览（低采样）", final: "成片渲染" }),
+      card("预览质量", "preview", [
+        rowSlider("预览比例", "preview_scale", 0.25, 1, 0.05, 2),
         rowNumber("预览采样数", "preview_samples", 1, 1e5, 1),
-        rowNumber("成片采样数", "final_samples", 1, 1e5, 1),
-        el("div", { class: "ptr_note", text: "调试时可以使用预览模式，渲染速度更快。确认效果后切到“成片渲染”获取更清晰的图片。" })
+        el("div", { class: "ptr_note", text: "预览使用缩小后的目标尺寸；进入最终渲染时恢复成片尺寸。" })
       ]),
       card("光线追踪", "call_split", [
         rowSlider("最大反弹", "max_bounce", 1, 16, 1, 0),
@@ -3126,10 +3165,11 @@
       ])
     ];
     const stages = buildStages([
-      { id: "camera", cards: [...cameraCards, ...materialCards] },
+      { id: "camera", cards: [resolutionCard, ...cameraCards, ...materialCards] },
       { id: "scene", cards: envCards },
       { id: "preview", cards: [...renderCards, ...postCards] },
       { id: "export", cards: [card("最终导出", "save_alt", [
+        rowNumber("成片采样数", "final_samples", 1, 1e5, 1),
         el("div", { class: "ptr_note", text: "确认参数与画面后，点击下方“开始最终渲染”。" })
       ])] }
     ]);
@@ -3277,20 +3317,6 @@
       this.renderer.dispose();
     }
   };
-
-  // plugins/georenderer/src/ui/workflow-state.js
-  var STEPS = [
-    { id: "camera", label: "镜头与材质", icon: "videocam" },
-    { id: "scene", label: "场景", icon: "landscape" },
-    { id: "preview", label: "预览渲染", icon: "tune" },
-    { id: "export", label: "最终导出", icon: "save_alt" }
-  ];
-  function stepIndex(id) {
-    return STEPS.findIndex((step) => step.id === id);
-  }
-  function isTraceStep(id) {
-    return id === "preview" || id === "export";
-  }
 
   // plugins/georenderer/src/ui/window.js
   function attachViewportEvents(canvas) {
@@ -3475,14 +3501,22 @@
         } catch (err) {
           showError(err);
         }
-      } else if (id === "preview" && PTR.settings.render_mode !== "preview") {
-        PTR.settings.render_mode = "preview";
-        PTR.tracer.reset();
-        PTR.finalStarted = false;
+      } else {
+        if (!PTR.open) resumeRenderer();
+        if (id === "preview" || !PTR.finalStarted) {
+          if (PTR.settings.render_mode !== "preview") PTR.tracer.reset();
+          PTR.settings.render_mode = "preview";
+          PTR.finalStarted = false;
+        }
+        if (PTR.needsRebuild) {
+          PTR.needsRebuild = false;
+          PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+          rebuildScene();
+        }
       }
       if (PTR.tracer) applyResolution();
     } else {
-      if (wasTrace && PTR.tracer) closeRenderer();
+      if (wasTrace && PTR.tracer) pauseRenderer();
       PTR.finalStarted = false;
       if (PTR.raster) PTR.raster.start();
     }
@@ -3495,6 +3529,7 @@
     PTR.finalStarted = true;
     PTR.settings.render_mode = "final";
     PTR.paused = false;
+    applyResolution();
     PTR.tracer.reset();
     PTR.lastFrame = performance.now();
     PTR.nodes.btnSave.style.display = "";
@@ -3665,7 +3700,10 @@
         if (PTR.refreshGroundTextures) PTR.refreshGroundTextures();
         if (PTR.nodes.groupList) buildGroupList();
         if (PTR.nodes.matlist) buildMaterialList();
-        if (!PTR.open || !PTR.tracer) return;
+        if (!PTR.open || !PTR.tracer) {
+          PTR.needsRebuild = true;
+          return;
+        }
         if (PTR.settings.auto_follow) {
           clearTimeout(PTR.rebuildTimer);
           PTR.rebuildTimer = setTimeout(() => rebuildScene(), 400);

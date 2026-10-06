@@ -10,7 +10,7 @@ import { DEFAULTS } from '../plugins/georenderer/src/core/config.js';
 import { buildBVH } from '../plugins/georenderer/src/scene/bvh.js';
 import { packAtlas } from '../plugins/georenderer/src/scene/atlas.js';
 import { buildEnvDistribution, parseHDR } from '../plugins/georenderer/src/scene/environment.js';
-import { STEPS, isTraceStep, stepIndex } from '../plugins/georenderer/src/ui/workflow-state.js';
+import { STEPS, isTraceStep, resolveRenderSize, stepIndex } from '../plugins/georenderer/src/ui/workflow-state.js';
 import { groupChainForElement, materialKey, resolveMaterialOverride } from '../plugins/georenderer/src/scene/group-overrides.js';
 import { applyPreset, applyTimeOfDay, formatClock } from '../plugins/georenderer/src/scene/presets.js';
 
@@ -93,6 +93,15 @@ test('workflow exposes four ordered steps and keeps path tracing out of setup', 
   assert.equal(isTraceStep('scene'), false);
   assert.equal(isTraceStep('preview'), true);
   assert.equal(isTraceStep('export'), true);
+});
+
+test('preview resolution is reduced until final render begins', () => {
+  const settings = { res_mode: 'custom', res_width: 1280, res_height: 720, preview_scale: 0.5, interactive_scale: 0.25 };
+  const viewport = { width: 640, height: 400 };
+  assert.deepEqual(resolveRenderSize(settings, 'preview', false, viewport, false), { width: 640, height: 360 });
+  assert.deepEqual(resolveRenderSize(settings, 'export', false, viewport, false), { width: 640, height: 360 });
+  assert.deepEqual(resolveRenderSize(settings, 'export', true, viewport, false), { width: 1280, height: 720 });
+  assert.deepEqual(resolveRenderSize(settings, 'preview', false, viewport, true), { width: 160, height: 90 });
 });
 
 test('group material overrides stay distinct when groups share a texture', () => {

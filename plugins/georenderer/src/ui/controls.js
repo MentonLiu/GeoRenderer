@@ -121,6 +121,7 @@ function onSettingChanged(key) {
 	const kind = CHANGE_KIND[key] || 'reset';
 	const t = PTR.tracer;
 	if (!t) return;
+	if (!PTR.open) { PTR.needsRebuild = true; return; }
 	if (kind === 'post') { t.present(PTR.settings); updateStatus(); return; }
 	if (kind === 'resize') { applyResolution(); return; }
 	if (kind === 'env') {

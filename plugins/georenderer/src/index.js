@@ -52,7 +52,7 @@ Plugin.register(PLUGIN_ID, {
 			if (PTR.refreshGroundTextures) PTR.refreshGroundTextures();
 			if (PTR.nodes.groupList) buildGroupList();
 			if (PTR.nodes.matlist) buildMaterialList();
-			if (!PTR.open || !PTR.tracer) return;
+			if (!PTR.open || !PTR.tracer) { PTR.needsRebuild = true; return; }
 			if (PTR.settings.auto_follow) {
 				clearTimeout(PTR.rebuildTimer);
 				PTR.rebuildTimer = setTimeout(() => rebuildScene(), 400);

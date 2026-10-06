@@ -19,7 +19,7 @@ export const CHANGE_KIND = {
 	grain_enable: 'post', grain_strength: 'post',
 	watermark_enable: 'post', watermark_text: 'post', watermark_size: 'post',
 	watermark_opacity: 'post', watermark_color: 'post',
-	res_mode: 'resize', res_width: 'resize', res_height: 'resize',
+	res_mode: 'resize', res_width: 'resize', res_height: 'resize', preview_scale: 'resize',
 	render_mode: 'post', preview_samples: 'post', final_samples: 'post',
 	auto_follow: 'post', auto_sync: 'post', interactive_scale: 'post',
 	gpu_profile: 'post',
@@ -60,6 +60,7 @@ export const PTR = {
 	rebuildTimer: 0,
 	autoFollow: false,
 	stale: false,
+	needsRebuild: false,
 	lastPasses: 0,
 	spsEma: 0,
 };

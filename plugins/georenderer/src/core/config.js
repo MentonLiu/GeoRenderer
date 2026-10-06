@@ -22,6 +22,7 @@ export const DEFAULTS = {
 	res_height: 720,
 	render_mode: 'preview',
 	preview_samples: 8,
+	preview_scale: 0.5,
 	final_samples: 256,
 	max_bounce: 6,
 	light_samples: 1,
