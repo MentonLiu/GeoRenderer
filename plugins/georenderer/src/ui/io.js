@@ -3,6 +3,7 @@ import { parseHDR } from '../scene/environment.js';
 import { syncControls } from './controls.js';
 import { showError } from './render-loop.js';
 import { PTR, saveSettings } from './state.js';
+import { canExport } from './workflow-state.js';
 
 export function loadEnvFile(file) {
 	PTR.scenePresetRequest++;
@@ -18,7 +19,8 @@ export function loadEnvFile(file) {
 				PTR.settings.env_mode = 'image';
 				syncControls();
 				PTR.nodes.envName.textContent = name + '  (' + PTR.customEnv.width + '×' + PTR.customEnv.height + ')';
-				if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+				if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+				else if (PTR.tracer) PTR.needsRebuild = true;
 				saveSettings();
 			} catch (err) { showError(err); }
 		};
@@ -48,7 +50,8 @@ export function loadEnvFile(file) {
 					PTR.settings.env_mode = 'image';
 					syncControls();
 					PTR.nodes.envName.textContent = name + '  (' + c.width + '×' + c.height + ')';
-					if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+					if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+					else if (PTR.tracer) PTR.needsRebuild = true;
 					saveSettings();
 				} catch (err) { showError(err); }
 			};
@@ -76,38 +79,59 @@ function drawWatermark(ctx, w, h) {
 	ctx.restore();
 }
 
-export function saveImage() {
+function renderOutputCanvas() {
 	const t = PTR.tracer;
-	if (!t || t.spp === 0) {
-		Blockbench.showQuickMessage('还没有渲染结果', 1500);
-		return;
+	if (!t || !canExport(PTR.step, PTR.finalStarted, t.spp, PTR.settings.final_samples)) {
+		Blockbench.showQuickMessage('请等待最终渲染完成', 1500);
+		return null;
 	}
+	t.present(PTR.settings);
+	const out = document.createElement('canvas');
+	out.width = t.canvas.width;
+	out.height = t.canvas.height;
+	const ctx = out.getContext('2d');
+	ctx.drawImage(t.canvas, 0, 0);
+	drawWatermark(ctx, out.width, out.height);
+	return out;
+}
+
+export function saveImage() {
 	try {
-		t.present(PTR.settings);
-		let dataUrl;
-		if (PTR.settings.watermark_enable && PTR.settings.watermark_text) {
-			const out = document.createElement('canvas');
-			out.width = t.canvas.width;
-			out.height = t.canvas.height;
-			const ctx = out.getContext('2d');
-			ctx.drawImage(t.canvas, 0, 0);
-			drawWatermark(ctx, out.width, out.height);
-			dataUrl = out.toDataURL('image/png');
-		} else {
-			dataUrl = t.canvas.toDataURL('image/png');
-		}
-		if (typeof Screencam !== 'undefined' && Screencam.returnScreenshot) {
-			Screencam.returnScreenshot(dataUrl);
-		} else {
-			Blockbench.export({
-				type: 'PNG',
-				extensions: ['png'],
-				name: (Project && Project.name ? Project.name : 'render') + '_pathtraced',
-				content: dataUrl,
-				savetype: 'image',
-			});
-		}
+		const canvas = renderOutputCanvas();
+		if (!canvas) return;
+		Blockbench.export({
+			type: 'PNG',
+			extensions: ['png'],
+			name: (Project && Project.name ? Project.name : 'render') + '_georenderer',
+			content: canvas.toDataURL('image/png'),
+			savetype: 'image',
+		});
 	} catch (err) {
 		showError(err);
 	}
+}
+
+export async function copyImage() {
+	try {
+		const canvas = renderOutputCanvas();
+		if (!canvas) return;
+		if (typeof clipboard !== 'undefined' && typeof nativeImage !== 'undefined') {
+			clipboard.writeImage(nativeImage.createFromDataURL(canvas.toDataURL('image/png')));
+		} else if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+			const blob = await new Promise((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('无法编码 PNG')), 'image/png'));
+			await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+		} else {
+			throw new Error('当前环境不支持图片剪贴板');
+		}
+		Blockbench.showQuickMessage('渲染图片已复制到剪贴板', 1800);
+	} catch (err) { showError(err); }
+}
+
+export function openBlockbenchScreenshot() {
+	try {
+		const canvas = renderOutputCanvas();
+		if (!canvas) return;
+		if (typeof Screencam === 'undefined' || !Screencam.returnScreenshot) throw new Error('Blockbench 截图面板不可用');
+		Screencam.returnScreenshot(canvas.toDataURL('image/png'));
+	} catch (err) { showError(err); }
 }

@@ -11,7 +11,8 @@ export function showError(err) {
 
 export function rebuildScene() {
 	const t = PTR.tracer;
-	if (!t || !PTR.open) return;
+	if (!t) return;
+	if (!PTR.open) { PTR.needsRebuild = true; return; }
 	try {
 		const scene = t.buildScene(PTR.settings, PTR.overrides, PTR.groupOverrides);
 		PTR.stale = false;
@@ -85,6 +86,7 @@ export function updateStatus(scene) {
 	if (PTR.nodes.overlay) {
 		PTR.nodes.overlay.textContent = t.spp >= max ? '渲染完成 · ' + t.spp + ' spp' : t.spp + ' spp';
 	}
+	if (PTR.onRenderStatus) PTR.onRenderStatus();
 	updateWatermarkPreview();
 }
 

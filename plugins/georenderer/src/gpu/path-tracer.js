@@ -94,11 +94,6 @@ export class PathTracer {
 		this.disposeScene();
 
 		const geo = collectGeometry();
-		if (geo.triCount === 0) {
-			this.scene = { triCount: 0, lightCount: 0, stats: { tris: 0, textures: 0, nodes: 0, ms: 0 } };
-			return this.scene;
-		}
-
 		const mats = buildMaterials(gl, geo.texRefs, geo.groupRefs, settings, overrides, groupOverrides);
 		const bvh = buildBVH(geo.positions, geo.triCount);
 

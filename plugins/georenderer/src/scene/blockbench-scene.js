@@ -42,7 +42,7 @@ export function cubemapToEquirect(cubemap, width = 512, height = 256) {
 export async function loadBlockbenchScene(id) {
 	if (typeof PreviewScene === 'undefined') return null;
 	const scene = PreviewScene.scenes && PreviewScene.scenes[id];
-	if (!scene || scene.require_minecraft_eula) return null;
+	if (!scene || (scene.require_minecraft_eula && !scene.loaded)) return null;
 	if (!scene.loaded && scene.lazyLoadFromWeb) await scene.lazyLoadFromWeb();
 	if (!scene.cubemap) return null;
 	return { cubemap: scene.cubemap, environment: cubemapToEquirect(scene.cubemap) };

@@ -34,6 +34,7 @@
     auto_follow: false,
     ortho: false,
     fov: 45,
+    camera_distance: 70,
     aperture: 0,
     focus_distance: 0,
     auto_focus: true,
@@ -354,6 +355,14 @@
   function isTraceStep(id) {
     return id === "preview" || id === "export";
   }
+  function canExport(step, finalStarted, spp, finalSamples) {
+    return step === "export" && !!finalStarted && spp >= Math.max(1, finalSamples);
+  }
+  function validateFinalSize(width, height, maxTextureSize) {
+    if (width > maxTextureSize || height > maxTextureSize) return "最终尺寸超过当前 GPU 的纹理上限";
+    if (width * height > 16777216) return "最终画面超过 1600 万像素，请降低宽度或高度";
+    return null;
+  }
   function resolveRenderSize(settings2, step, finalStarted, viewport, interacting) {
     let width = settings2.res_mode === "custom" ? settings2.res_width : Math.max(64, Math.floor(viewport.width));
     let height = settings2.res_mode === "custom" ? settings2.res_height : Math.max(64, Math.floor(viewport.height));
@@ -381,7 +390,11 @@
   }
   function rebuildScene() {
     const t = PTR.tracer;
-    if (!t || !PTR.open) return;
+    if (!t) return;
+    if (!PTR.open) {
+      PTR.needsRebuild = true;
+      return;
+    }
     try {
       const scene = t.buildScene(PTR.settings, PTR.overrides, PTR.groupOverrides);
       PTR.stale = false;
@@ -450,6 +463,7 @@
     if (PTR.nodes.overlay) {
       PTR.nodes.overlay.textContent = t.spp >= max ? "渲染完成 · " + t.spp + " spp" : t.spp + " spp";
     }
+    if (PTR.onRenderStatus) PTR.onRenderStatus();
     updateWatermarkPreview();
   }
   function updateWatermarkPreview() {
@@ -1013,6 +1027,8 @@
     const sun = sunDirection(settings2);
     const glowPower = 8 + 260 * (1 - haze);
     const glowStrength = 0.35 + 2.5 * haze;
+    const daylight = clamp((Math.sin(((settings2.time_of_day ?? 12) - 6) * Math.PI / 12) + 0.2) / 1.2, 0, 1);
+    const skyExposure = mode === "sky" ? 0.08 + daylight * 0.92 : 1;
     for (let y = 0; y < h; y++) {
       const theta = (y + 0.5) / h * Math.PI;
       const sinT = Math.sin(theta), cosT = Math.cos(theta);
@@ -1052,9 +1068,9 @@
             b += sunCol[2] * glow;
           }
         }
-        out[o] = r;
-        out[o + 1] = g;
-        out[o + 2] = b;
+        out[o] = r * skyExposure;
+        out[o + 1] = g * skyExposure;
+        out[o + 2] = b * skyExposure;
         out[o + 3] = 1;
       }
     }
@@ -1738,10 +1754,6 @@
       const t0 = performance.now();
       this.disposeScene();
       const geo = collectGeometry();
-      if (geo.triCount === 0) {
-        this.scene = { triCount: 0, lightCount: 0, stats: { tris: 0, textures: 0, nodes: 0, ms: 0 } };
-        return this.scene;
-      }
       const mats = buildMaterials(gl, geo.texRefs, geo.groupRefs, settings2, overrides, groupOverrides);
       const bvh = buildBVH(geo.positions, geo.triCount);
       const n = geo.triCount;
@@ -2283,7 +2295,7 @@
   function register(key, setter) {
     PTR.controls.push({ key, set: setter });
   }
-  function syncControls2() {
+  function syncControls() {
     PTR.controls.forEach((c) => {
       try {
         c.set(PTR.settings[c.key]);
@@ -2451,9 +2463,10 @@
           PTR.customEnv = parseHDR(reader.result);
           PTR.customEnvName = name;
           PTR.settings.env_mode = "image";
-          syncControls2();
+          syncControls();
           PTR.nodes.envName.textContent = name + "  (" + PTR.customEnv.width + "×" + PTR.customEnv.height + ")";
-          if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+          if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+          else if (PTR.tracer) PTR.needsRebuild = true;
           saveSettings();
         } catch (err) {
           showError(err);
@@ -2483,9 +2496,10 @@
             PTR.customEnv = { width: c.width, height: c.height, data };
             PTR.customEnvName = name;
             PTR.settings.env_mode = "image";
-            syncControls2();
+            syncControls();
             PTR.nodes.envName.textContent = name + "  (" + c.width + "×" + c.height + ")";
-            if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+            if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+            else if (PTR.tracer) PTR.needsRebuild = true;
             saveSettings();
           } catch (err) {
             showError(err);
@@ -2513,37 +2527,59 @@
     ctx.fillText(s.watermark_text, pad, h - pad);
     ctx.restore();
   }
-  function saveImage() {
+  function renderOutputCanvas() {
     const t = PTR.tracer;
-    if (!t || t.spp === 0) {
-      Blockbench.showQuickMessage("还没有渲染结果", 1500);
-      return;
+    if (!t || !canExport(PTR.step, PTR.finalStarted, t.spp, PTR.settings.final_samples)) {
+      Blockbench.showQuickMessage("请等待最终渲染完成", 1500);
+      return null;
     }
+    t.present(PTR.settings);
+    const out = document.createElement("canvas");
+    out.width = t.canvas.width;
+    out.height = t.canvas.height;
+    const ctx = out.getContext("2d");
+    ctx.drawImage(t.canvas, 0, 0);
+    drawWatermark(ctx, out.width, out.height);
+    return out;
+  }
+  function saveImage() {
     try {
-      t.present(PTR.settings);
-      let dataUrl;
-      if (PTR.settings.watermark_enable && PTR.settings.watermark_text) {
-        const out = document.createElement("canvas");
-        out.width = t.canvas.width;
-        out.height = t.canvas.height;
-        const ctx = out.getContext("2d");
-        ctx.drawImage(t.canvas, 0, 0);
-        drawWatermark(ctx, out.width, out.height);
-        dataUrl = out.toDataURL("image/png");
+      const canvas = renderOutputCanvas();
+      if (!canvas) return;
+      Blockbench.export({
+        type: "PNG",
+        extensions: ["png"],
+        name: (Project && Project.name ? Project.name : "render") + "_georenderer",
+        content: canvas.toDataURL("image/png"),
+        savetype: "image"
+      });
+    } catch (err) {
+      showError(err);
+    }
+  }
+  async function copyImage() {
+    try {
+      const canvas = renderOutputCanvas();
+      if (!canvas) return;
+      if (typeof clipboard !== "undefined" && typeof nativeImage !== "undefined") {
+        clipboard.writeImage(nativeImage.createFromDataURL(canvas.toDataURL("image/png")));
+      } else if (navigator.clipboard && typeof ClipboardItem !== "undefined") {
+        const blob = await new Promise((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("无法编码 PNG")), "image/png"));
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
       } else {
-        dataUrl = t.canvas.toDataURL("image/png");
+        throw new Error("当前环境不支持图片剪贴板");
       }
-      if (typeof Screencam !== "undefined" && Screencam.returnScreenshot) {
-        Screencam.returnScreenshot(dataUrl);
-      } else {
-        Blockbench.export({
-          type: "PNG",
-          extensions: ["png"],
-          name: (Project && Project.name ? Project.name : "render") + "_pathtraced",
-          content: dataUrl,
-          savetype: "image"
-        });
-      }
+      Blockbench.showQuickMessage("渲染图片已复制到剪贴板", 1800);
+    } catch (err) {
+      showError(err);
+    }
+  }
+  function openBlockbenchScreenshot() {
+    try {
+      const canvas = renderOutputCanvas();
+      if (!canvas) return;
+      if (typeof Screencam === "undefined" || !Screencam.returnScreenshot) throw new Error("Blockbench 截图面板不可用");
+      Screencam.returnScreenshot(canvas.toDataURL("image/png"));
     } catch (err) {
       showError(err);
     }
@@ -2704,12 +2740,16 @@
     }
     clearTimeout(PTR.rebuildTimer);
     const data = payload.data;
+    PTR.scenePresetRequest++;
+    PTR.sceneCubemap = null;
     for (const k in DEFAULTS) if (data[k] !== void 0) PTR.settings[k] = data[k];
+    PTR.settings.render_mode = "preview";
+    PTR.finalStarted = false;
     if (PTR.settings.env_mode === "image" && !PTR.customEnv) {
       PTR.settings.env_mode = "sky";
     }
-    syncControls2();
-    if (PTR.updateModeButton) PTR.updateModeButton();
+    syncControls();
+    if (PTR.onSettingsLoaded) PTR.onSettingsLoaded();
     saveSettings();
     const t = PTR.tracer;
     if (t) {
@@ -2746,11 +2786,15 @@
     if (!confirm("确定要将所有渲染设置重置为默认值吗？（不影响材质单独覆盖的参数）")) return;
     clearTimeout(PTR.rebuildTimer);
     for (const k in DEFAULTS) PTR.settings[k] = DEFAULTS[k];
+    PTR.settings.render_mode = "preview";
+    PTR.finalStarted = false;
+    PTR.scenePresetRequest++;
+    PTR.sceneCubemap = null;
     PTR.customEnv = null;
     PTR.customEnvName = "";
     if (PTR.nodes.envName) PTR.nodes.envName.textContent = "(未载入)";
-    syncControls2();
-    if (PTR.updateModeButton) PTR.updateModeButton();
+    syncControls();
+    if (PTR.onSettingsLoaded) PTR.onSettingsLoaded();
     saveSettings();
     const t = PTR.tracer;
     if (t) {
@@ -2901,10 +2945,43 @@
   async function loadBlockbenchScene(id) {
     if (typeof PreviewScene === "undefined") return null;
     const scene = PreviewScene.scenes && PreviewScene.scenes[id];
-    if (!scene || scene.require_minecraft_eula) return null;
+    if (!scene || scene.require_minecraft_eula && !scene.loaded) return null;
     if (!scene.loaded && scene.lazyLoadFromWeb) await scene.lazyLoadFromWeb();
     if (!scene.cubemap) return null;
     return { cubemap: scene.cubemap, environment: cubemapToEquirect(scene.cubemap) };
+  }
+
+  // plugins/georenderer/src/ui/export-panel.js
+  function buildExportPanel() {
+    PTR.nodes.exportSummary = el("div", { class: "ptr_summary" });
+    return [
+      card("最终参数", "fact_check", [
+        PTR.nodes.exportSummary,
+        rowNumber("成片采样数", "final_samples", 1, 1e5, 1)
+      ]),
+      card("渲染与输出", "save_alt", [
+        el("div", { class: "ptr_note", text: "左侧保留当前预览。确认后点击下方“开始最终渲染”；达到目标采样数后可复制图片、另存 PNG，或交给 Blockbench 截图面板。" })
+      ])
+    ];
+  }
+  function updateExportSummary() {
+    const host = PTR.nodes.exportSummary;
+    if (!host) return;
+    const s = PTR.settings;
+    const size = s.res_mode === "custom" ? `${s.res_width} × ${s.res_height}` : "适应预览窗口";
+    const groups = Object.keys(PTR.groupOverrides).length;
+    const scene = SCENE_PRESETS[s.scene_preset]?.label || "自定义";
+    const effects = [s.denoise && "降噪", s.bloom_enable && "泛光", s.vignette_enable && "暗角", s.sharpen_enable && "锐化", s.grain_enable && "颗粒"].filter(Boolean).join("、") || "无";
+    const groundTexture = (typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === s.ground_texture_uuid);
+    const lines = [
+      `画面：${size}，${s.final_samples} spp`,
+      `镜头：${s.ortho ? "正交" : `FOV ${s.fov}°`}，光圈 ${s.aperture}，${s.auto_focus ? "自动对焦" : `焦距 ${s.focus_distance}`}`,
+      `材质：${groups} 个组覆盖，默认粗糙度 ${s.def_roughness} / 金属度 ${s.def_metalness}`,
+      `场景：${scene}，${formatClock(s.time_of_day)}，地面${s.ground_on ? "开启" : "关闭"}${groundTexture ? "（" + groundTexture.name + "）" : ""}`,
+      `追踪：${s.max_bounce} 次反弹，${s.light_samples} 次光源采样`,
+      `后期：${s.tone_mapping.toUpperCase()}，${effects}`
+    ];
+    host.replaceChildren(...lines.map((line) => el("div", { class: "ptr_summary_line", text: line })));
   }
 
   // plugins/georenderer/src/ui/sidebar.js
@@ -2961,7 +3038,8 @@
       if (PTR.cam.syncFromPreview()) {
         PTR.settings.fov = PTR.cam.fov;
         PTR.settings.ortho = PTR.cam.ortho;
-        syncControls2();
+        PTR.settings.camera_distance = PTR.cam.distance;
+        syncControls();
         saveSettings();
         if (PTR.tracer) PTR.tracer.reset();
       }
@@ -2978,6 +3056,9 @@
         }
       }
       if (PTR.tracer) PTR.tracer.reset();
+      PTR.settings.camera_distance = PTR.cam.distance;
+      syncControls();
+      saveSettings();
     });
     camBtns.appendChild(btnSync);
     camBtns.appendChild(btnFrame);
@@ -2986,6 +3067,7 @@
         camBtns,
         rowCheck("正交投影", "ortho"),
         rowSlider("FOV", "fov", 5, 120, 1, 0),
+        rowSlider("镜头距离", "camera_distance", 0.5, 2e3, 0.5, 1),
         rowCheck("自动跟随主视图", "auto_sync")
       ]),
       card("景深", "filter_center_focus", [
@@ -3007,10 +3089,11 @@
         PTR.customEnvName = "";
         PTR.nodes.sceneSource.textContent = "正在读取 Blockbench 场景…";
         PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
-        syncControls2();
+        syncControls();
         saveSettings();
         try {
-          if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, null);
+          if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, null);
+          else if (PTR.tracer) PTR.needsRebuild = true;
         } catch (err) {
           showError(err);
         }
@@ -3023,11 +3106,12 @@
             PTR.customEnvName = preset.label;
             PTR.settings.env_mode = "image";
             PTR.nodes.sceneSource.textContent = "使用 Blockbench 内置“" + preset.label + "”环境贴图";
-            if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+            if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+            else if (PTR.tracer) PTR.needsRebuild = true;
           } else {
             PTR.nodes.sceneSource.textContent = "内置贴图不可用，使用“" + preset.label + "”程序化氛围";
           }
-          syncControls2();
+          syncControls();
           saveSettings();
         } catch (err) {
           if (request === PTR.scenePresetRequest) PTR.nodes.sceneSource.textContent = "内置贴图读取失败，已使用程序化氛围";
@@ -3052,10 +3136,11 @@
       PTR.nodes.envName.textContent = "(未载入)";
       if (PTR.settings.env_mode === "image") {
         PTR.settings.env_mode = "sky";
-        syncControls2();
+        syncControls();
       }
       try {
-        if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, null);
+        if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, null);
+        else if (PTR.tracer) PTR.needsRebuild = true;
       } catch (err) {
         showError(err);
       }
@@ -3082,7 +3167,7 @@
       ]),
       card("太阳", "brightness_high", [
         rowCheck("启用太阳", "sun_enable"),
-        rowSlider("太阳高度", "sun_elevation", -10, 90, 0.5, 1),
+        rowSlider("太阳高度", "sun_elevation", -90, 90, 0.5, 1),
         rowSlider("太阳方位", "sun_azimuth", 0, 360, 1, 0),
         rowSlider("太阳角直径", "sun_angle", 0.25, 45, 0.05, 2),
         rowSlider("太阳强度", "sun_intensity", 0, 40, 0.1, 2),
@@ -3168,13 +3253,11 @@
       { id: "camera", cards: [resolutionCard, ...cameraCards, ...materialCards] },
       { id: "scene", cards: envCards },
       { id: "preview", cards: [...renderCards, ...postCards] },
-      { id: "export", cards: [card("最终导出", "save_alt", [
-        rowNumber("成片采样数", "final_samples", 1, 1e5, 1),
-        el("div", { class: "ptr_note", text: "确认参数与画面后，点击下方“开始最终渲染”。" })
-      ])] }
+      { id: "export", cards: buildExportPanel() }
     ]);
     buildGroupList();
     buildMaterialList();
+    updateExportSummary();
     return stages;
   }
 
@@ -3196,6 +3279,9 @@
       this.groundMap = null;
       this.floor.rotation.x = -Math.PI / 2;
       this.scene.add(this.floor);
+      this.groundDisk = new THREE.Mesh(new THREE.CircleGeometry(1, 64), this.floor.material);
+      this.groundDisk.rotation.x = -Math.PI / 2;
+      this.scene.add(this.groundDisk);
       this.model = new THREE.Group();
       this.ownedMaterials = [];
       this.scene.add(this.model);
@@ -3274,21 +3360,28 @@
       target.position.set(...cam.pos);
       target.lookAt(...cam.target);
       this.grid.visible = PTR.step === "camera";
-      this.floor.visible = PTR.step !== "camera" && !!settings2.ground_on;
+      this.floor.visible = PTR.step !== "camera" && !!settings2.ground_on && !(settings2.ground_radius > 0);
+      this.groundDisk.visible = PTR.step !== "camera" && !!settings2.ground_on && settings2.ground_radius > 0;
       this.floor.position.y = settings2.ground_y;
+      this.groundDisk.position.y = settings2.ground_y;
+      if (this.groundDisk.visible) this.groundDisk.scale.setScalar(settings2.ground_radius);
       this.floor.material.color.set(settings2.ground_color);
       this.floor.material.roughness = settings2.ground_rough;
       this.floor.material.metalness = settings2.ground_metal;
+      this.floor.material.transparent = !!settings2.ground_catcher;
+      this.floor.material.opacity = settings2.ground_catcher ? 0.25 : 1;
       if (this.groundMap) {
         const repeat = 2e3 / Math.max(0.01, settings2.ground_texture_scale || 1);
         this.groundMap.repeat.set(repeat, repeat);
       }
+      const daylight = Math.max(0.1, Math.min(1, (Math.sin((settings2.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
+      this.ambient.intensity = PTR.step === "camera" ? 1.2 : 0.2 + daylight * Math.max(0, settings2.env_intensity);
       this.sun.visible = PTR.step !== "camera" && !!settings2.sun_enable;
       const dir = sunDirection(settings2);
       this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
       this.sun.intensity = Math.max(0, settings2.sun_intensity / 4);
       this.sun.color.set(settings2.sun_color);
-      this.scene.background = PTR.step !== "camera" && settings2.bg_mode === "transparent" ? null : PTR.step !== "camera" && PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(PTR.step === "camera" ? "#252b34" : settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon);
+      this.scene.background = PTR.step !== "camera" && settings2.bg_mode === "transparent" ? null : PTR.step !== "camera" && PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(PTR.step === "camera" ? "#252b34" : settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(PTR.step === "camera" || settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
       this.renderer.render(this.scene, target);
     }
     start() {
@@ -3312,6 +3405,7 @@
       for (const material of this.ownedMaterials) material.dispose();
       this.ownedMaterials = [];
       this.floor.geometry.dispose();
+      this.groundDisk.geometry.dispose();
       this.floor.material.dispose();
       if (this.groundMap) this.groundMap.dispose();
       this.renderer.dispose();
@@ -3360,6 +3454,9 @@
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
       PTR.cam.zoom(e.deltaY);
+      PTR.settings.camera_distance = PTR.cam.distance;
+      syncControls();
+      saveSettings();
       clearTimeout(PTR.interactTimer);
       setInteracting(true);
       PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
@@ -3418,6 +3515,10 @@
       el("span", { text: "保存 PNG" })
     ]);
     btnSave.addEventListener("click", saveImage);
+    const btnCopy = el("button", { class: "ptr_btn", text: "复制图片" });
+    btnCopy.addEventListener("click", copyImage);
+    const btnBlockbench = el("button", { class: "ptr_btn", text: "Blockbench 截图" });
+    btnBlockbench.addEventListener("click", openBlockbenchScreenshot);
     const toolGroup = el("div", { style: { display: "flex", alignItems: "center", gap: "2px" } }, [
       btnRestart,
       btnReload,
@@ -3431,7 +3532,9 @@
       btnStart,
       btnPause,
       toolGroup,
-      btnSave
+      btnCopy,
+      btnSave,
+      btnBlockbench
     ]);
     const wrapper = el("div", {
       style: { display: "flex", flexDirection: "column", height: "100%", minHeight: "420px" }
@@ -3449,7 +3552,9 @@
       btnPause,
       watermark,
       btnStart,
+      btnCopy,
       btnSave,
+      btnBlockbench,
       toolGroup,
       footer
     });
@@ -3471,6 +3576,21 @@
     frame.style.width = Math.floor(w) + "px";
     frame.style.height = Math.floor(w / aspect) + "px";
   }
+  function syncSettingsToView() {
+    PTR.cam.fov = PTR.settings.fov;
+    PTR.cam.ortho = !!PTR.settings.ortho;
+    PTR.cam.distance = PTR.settings.camera_distance;
+    if (PTR.raster) PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
+    if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
+    fitFrame();
+    updateExportSummary();
+  }
+  function updateExportActions() {
+    const ready = canExport(PTR.step, PTR.finalStarted, PTR.tracer ? PTR.tracer.spp : 0, PTR.settings.final_samples);
+    for (const button of [PTR.nodes.btnCopy, PTR.nodes.btnSave, PTR.nodes.btnBlockbench]) button.disabled = !ready;
+    PTR.nodes.btnStart.disabled = !PTR.tracer || PTR.finalStarted && !ready;
+    PTR.nodes.btnStart.textContent = ready ? "重新渲染" : PTR.finalStarted ? "渲染中…" : "开始最终渲染";
+  }
   function setStep(id) {
     if (stepIndex(id) < 0 || !PTR.dialog) return;
     const wasTrace = isTraceStep(PTR.step);
@@ -3488,7 +3608,9 @@
     PTR.nodes.watermark.style.display = trace ? "" : "none";
     PTR.nodes.footer.style.display = trace ? "flex" : "none";
     PTR.nodes.btnStart.style.display = id === "export" ? "" : "none";
-    PTR.nodes.btnSave.style.display = id === "export" && PTR.finalStarted ? "" : "none";
+    PTR.nodes.btnSave.style.display = id === "export" ? "" : "none";
+    PTR.nodes.btnCopy.style.display = id === "export" ? "" : "none";
+    PTR.nodes.btnBlockbench.style.display = id === "export" ? "" : "none";
     PTR.nodes.btnPause.style.display = id === "preview" || PTR.finalStarted ? "" : "none";
     PTR.nodes.toolGroup.style.display = id === "preview" ? "flex" : "none";
     if (trace) {
@@ -3514,7 +3636,6 @@
           rebuildScene();
         }
       }
-      if (PTR.tracer) applyResolution();
     } else {
       if (wasTrace && PTR.tracer) pauseRenderer();
       PTR.finalStarted = false;
@@ -3522,48 +3643,63 @@
     }
     fitFrame();
     if (trace && PTR.tracer) applyResolution();
+    updateExportSummary();
+    updateExportActions();
     saveSettings();
   }
   function startFinal() {
     if (PTR.step !== "export" || !PTR.tracer) return;
+    const rect = PTR.nodes.frame.getBoundingClientRect();
+    const target = resolveRenderSize(PTR.settings, "export", true, rect, false);
+    const gl = PTR.tracer.gl;
+    const sizeError = validateFinalSize(target.width, target.height, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    if (sizeError) {
+      showError(new Error(sizeError));
+      return;
+    }
     PTR.finalStarted = true;
     PTR.settings.render_mode = "final";
     PTR.paused = false;
-    applyResolution();
-    PTR.tracer.reset();
-    PTR.lastFrame = performance.now();
-    PTR.nodes.btnSave.style.display = "";
-    updateStatus();
-    saveSettings();
+    try {
+      applyResolution();
+      PTR.tracer.reset();
+      PTR.lastFrame = performance.now();
+      updateStatus();
+      updateExportActions();
+      saveSettings();
+    } catch (err) {
+      PTR.finalStarted = false;
+      PTR.settings.render_mode = "preview";
+      showError(err);
+    }
   }
   function startRenderer() {
     const tracer = new PathTracer(PTR.nodes.canvas);
-    tracer.init();
-    PTR.tracer = tracer;
-    PTR.refreshMaterialList = buildMaterialList;
-    PTR.open = true;
-    applyResolution();
-    tracer.setEnvironment(PTR.settings, PTR.customEnv);
-    rebuildScene();
-    if (!PTR.camInitialized) {
-      if (!PTR.cam.syncFromPreview() && tracer.scene) PTR.cam.frameBounds(tracer.scene.bounds);
-      PTR.settings.fov = PTR.cam.fov;
-      PTR.settings.ortho = PTR.cam.ortho;
-      syncControls();
-      PTR.camInitialized = true;
+    try {
+      tracer.init();
+      PTR.tracer = tracer;
+      PTR.refreshMaterialList = buildMaterialList;
+      PTR.open = true;
+      applyResolution();
+      tracer.setEnvironment(PTR.settings, PTR.customEnv);
+      rebuildScene();
+      tracer.setCamera(PTR.cam.state());
+      if (window.ResizeObserver) {
+        PTR.resizeObs = new ResizeObserver(() => {
+          if (PTR.settings.res_mode === "fit") applyResolution();
+        });
+        PTR.resizeObs.observe(PTR.nodes.frame);
+      }
+      PTR.paused = false;
+      PTR.lastFrame = performance.now();
+      cancelAnimationFrame(PTR.raf);
+      loop();
+    } catch (err) {
+      PTR.open = false;
+      PTR.tracer = null;
+      tracer.dispose();
+      throw err;
     }
-    tracer.setCamera(PTR.cam.state());
-    if (window.ResizeObserver) {
-      PTR.resizeObs = new ResizeObserver(() => {
-        if (PTR.settings.res_mode === "fit") applyResolution();
-      });
-      PTR.resizeObs.observe(PTR.nodes.viewport);
-    }
-    PTR.open = true;
-    PTR.paused = false;
-    PTR.lastFrame = performance.now();
-    cancelAnimationFrame(PTR.raf);
-    loop();
   }
   function openWindow() {
     if (typeof Dialog === "undefined") return;
@@ -3579,6 +3715,10 @@
       }
       PTR.dialog = null;
     }
+    PTR.cam.syncFromPreview();
+    PTR.cam.fov = PTR.settings.fov;
+    PTR.cam.ortho = !!PTR.settings.ortho;
+    PTR.cam.distance = PTR.settings.camera_distance;
     const content = buildWindow();
     PTR.dialog = new Dialog("georenderer_dialog", {
       title: "GeoRenderer",
@@ -3613,12 +3753,17 @@
           if (key === "res_width" || key === "res_height") fitFrame();
           if (key === "fov") PTR.cam.fov = PTR.settings.fov;
           if (key === "ortho") PTR.cam.ortho = !!PTR.settings.ortho;
+          if (key === "camera_distance") PTR.cam.distance = PTR.settings.camera_distance;
           if (key === "time_of_day") {
             applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
             if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
+            syncControls();
           }
           if (key === "ground_texture_uuid" && PTR.raster) PTR.raster.setGroundTexture((Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
+          updateExportSummary();
         };
+        PTR.onRenderStatus = updateExportActions;
+        PTR.onSettingsLoaded = syncSettingsToView;
         PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
         PTR.frameResizeObs.observe(PTR.nodes.viewport);
         setStep("camera");
@@ -3631,6 +3776,8 @@
     }, 60);
   }
   function closeWindow() {
+    clearTimeout(PTR.interactTimer);
+    clearTimeout(PTR.rebuildTimer);
     closeRenderer();
     if (PTR.raster) {
       PTR.raster.dispose();
@@ -3641,10 +3788,17 @@
       PTR.frameResizeObs = null;
     }
     PTR.onSettingChanged = null;
+    PTR.onRenderStatus = null;
+    PTR.onSettingsLoaded = null;
+    PTR.needsRebuild = false;
+    PTR.refreshMaterialList = null;
+    PTR.refreshGroundTextures = null;
+    PTR.controls = [];
+    PTR.nodes = {};
   }
 
   // plugins/georenderer/src/assets/georenderer.css
-  var georenderer_default = "\n#ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }\n#ptr_root * { box-sizing: border-box; }\n#ptr_step_nav { display: flex; gap: 6px; padding: 9px 12px; background: var(--color-ui); border-bottom: 1px solid var(--color-border); }\n.ptr_step { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 5px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-back); color: var(--color-text); cursor: pointer; font-size: 12px; }\n.ptr_step:hover { background: var(--color-selected); }\n.ptr_step.active { border-color: var(--color-accent); color: var(--color-light); box-shadow: inset 0 -2px var(--color-accent); }\n.ptr_step_number { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: var(--color-selected); font-weight: 700; }\n.ptr_step.active .ptr_step_number { background: var(--color-accent); color: var(--color-accent_text); }\n#ptr_viewport {\n	flex: 1 1 auto; position: relative; background: #101014;\n	display: flex; align-items: center; justify-content: center; overflow: hidden;\n	min-width: 240px;\n}\n#ptr_frame { position: relative; flex: 0 0 auto; background: #20242b; overflow: hidden; }\n#ptr_frame canvas {\n	width: 100%; height: 100%; object-fit: contain;\n	image-rendering: auto; cursor: grab;\n	background-image: linear-gradient(45deg, #2a2a30 25%, transparent 25%),\n		linear-gradient(-45deg, #2a2a30 25%, transparent 25%),\n		linear-gradient(45deg, transparent 75%, #2a2a30 75%),\n		linear-gradient(-45deg, transparent 75%, #2a2a30 75%);\n	background-size: 16px 16px;\n	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;\n}\n#ptr_raster_canvas { position: absolute; inset: 0; }\n#ptr_canvas { position: absolute; inset: 0; }\n#ptr_viewport canvas.dragging { cursor: grabbing; }\n#ptr_overlay {\n	position: absolute; left: 8px; top: 8px; pointer-events: none;\n	font-size: 11px; color: #fff; text-shadow: 0 1px 3px #000;\n	background: rgba(0,0,0,0.45); padding: 3px 7px; border-radius: 3px;\n}\n#ptr_watermark {\n	position: absolute; left: 12px; bottom: 10px; pointer-events: none;\n	font-family: sans-serif; line-height: 1; white-space: nowrap;\n	text-shadow: 0 1px 3px rgba(0,0,0,0.6);\n}\n#ptr_sidebar {\n	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;\n	background: var(--color-ui); border-left: 1px solid var(--color-border);\n}\n.ptr_stagepanes { flex: 1 1 auto; overflow-y: auto; padding: 10px; min-width: 0; }\n.ptr_stagepane[hidden] { display: none; }\n.ptr_tabs {\n	flex: 0 0 42px; display: flex; flex-direction: column; align-items: stretch;\n	padding: 6px 0; gap: 2px; background: var(--color-back);\n	border-right: 1px solid var(--color-border); overflow-y: auto;\n}\n.ptr_tab {\n	width: 100%; min-width: 0; height: 38px; display: flex; align-items: center; justify-content: center;\n	background: transparent; border: none; cursor: pointer; position: relative;\n	color: var(--color-subtle_text); padding: 0; box-shadow: none;\n}\n.ptr_tab .material-icons { font-size: 19px; max-width: 19px; }\n.ptr_tab:hover { color: var(--color-text); background: var(--color-selected); }\n.ptr_tab.active { color: var(--color-light); background: var(--color-selected); }\n.ptr_tab.active::before {\n	content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;\n	background: var(--color-accent); border-radius: 0 2px 2px 0;\n}\n.ptr_tabpanes { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 10px; min-width: 0; }\n.ptr_tabpane { display: none; }\n.ptr_tabpane.active { display: block; }\n.ptr_card {\n	background: var(--color-back); border: 1px solid var(--color-border);\n	border-radius: 6px; padding: 9px 10px 10px; margin-bottom: 10px;\n}\n.ptr_card_head {\n	display: flex; align-items: center; gap: 6px; margin-bottom: 7px;\n	font-size: 12px; font-weight: 600; color: var(--color-light);\n}\n.ptr_card_head .material-icons { font-size: 16px; max-width: 16px; opacity: 0.85; }\n.ptr_row {\n	display: flex; align-items: center; gap: 6px; margin: 5px 0; min-height: 22px;\n}\n.ptr_row > label { flex: 0 0 96px; font-size: 12px; color: var(--color-text); }\n.ptr_row > .ptr_ctrl { flex: 1 1 auto; display: flex; align-items: center; gap: 5px; min-width: 0; }\n.ptr_row input[type=range] { flex: 1 1 auto; min-width: 40px; }\n.ptr_row input[type=number] {\n	width: 56px; flex: 0 0 56px; background: var(--color-ui);\n	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;\n	padding: 1px 3px; font-size: 11px;\n}\n.ptr_row input[type=color] { width: 32px; height: 20px; padding: 0; border: 1px solid var(--color-border); background: none; border-radius: 3px; }\n.ptr_row input[type=text] {\n	flex: 1 1 auto; min-width: 0; background: var(--color-ui);\n	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;\n	padding: 2px 6px; font-size: 12px;\n}\n.ptr_row select {\n	flex: 1 1 auto; min-width: 0; background: var(--color-ui); color: var(--color-text);\n	border: 1px solid var(--color-border); border-radius: 3px; padding: 2px; font-size: 12px;\n}\n.ptr_note { font-size: 11px; color: var(--color-subtle_text); margin: 4px 2px 2px; line-height: 1.4; }\n#ptr_footer {\n	display: flex; align-items: center; gap: 4px; padding: 6px 8px;\n	border-top: 1px solid var(--color-border); background: var(--color-ui);\n}\n#ptr_progress { flex: 1 1 auto; height: 6px; background: var(--color-back); border-radius: 3px; overflow: hidden; margin: 0 8px; }\n#ptr_progress > div { height: 100%; width: 0%; background: var(--color-accent); transition: width .1s linear; }\n#ptr_status { font-size: 11px; color: var(--color-subtle_text); white-space: nowrap; }\n.ptr_btn {\n	background: var(--color-button); color: var(--color-text); border: 1px solid var(--color-border);\n	border-radius: 4px; padding: 4px 11px; cursor: pointer; font-size: 12px; white-space: nowrap;\n	display: inline-flex; align-items: center; gap: 5px;\n}\n.ptr_btn .material-icons { font-size: 15px; max-width: 15px; }\n.ptr_btn:hover { background: var(--color-selected); }\n.ptr_btn.accent { background: var(--color-accent); color: var(--color-accent_text); border-color: var(--color-accent); }\n.ptr_iconbtn {\n	width: 27px; min-width: 0; height: 27px; flex: 0 0 27px; display: flex; align-items: center; justify-content: center;\n	background: transparent; color: var(--color-text); border: 1px solid transparent;\n	border-radius: 4px; cursor: pointer; padding: 0; box-shadow: none;\n}\n.ptr_iconbtn .material-icons { font-size: 17px; max-width: 17px; }\n.ptr_iconbtn:hover { background: var(--color-selected); border-color: var(--color-border); }\n.ptr_presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }\n.ptr_presets .ptr_btn { padding: 2px 7px; font-size: 11px; }\n.ptr_dialog_root .dialog_content { margin: 0 !important; padding: 0 !important; overflow: hidden !important; height: 100% !important; max-height: none !important; box-sizing: border-box; }\n.ptr_dialog_root .dialog_wrapper { min-height: 0; }\n.ptr_dialog_root .dialog_handle { cursor: move; }\n#ptr_matlist { margin-top: 4px; }\n.ptr_mat {\n	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;\n	background: var(--color-ui);\n}\n.ptr_mat > .ptr_mat_head { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 3px; font-weight: 600; }\n.ptr_mat > .ptr_mat_head img { width: 20px; height: 20px; image-rendering: pixelated; background: #0006; border-radius: 3px; }\n";
+  var georenderer_default = "\n#ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }\n#ptr_root * { box-sizing: border-box; }\n#ptr_step_nav { display: flex; gap: 6px; padding: 9px 12px; background: var(--color-ui); border-bottom: 1px solid var(--color-border); }\n.ptr_step { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 5px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-back); color: var(--color-text); cursor: pointer; font-size: 12px; }\n.ptr_step:hover { background: var(--color-selected); }\n.ptr_step.active { border-color: var(--color-accent); color: var(--color-light); box-shadow: inset 0 -2px var(--color-accent); }\n.ptr_step_number { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: var(--color-selected); font-weight: 700; }\n.ptr_step.active .ptr_step_number { background: var(--color-accent); color: var(--color-accent_text); }\n#ptr_viewport {\n	flex: 1 1 auto; position: relative; background: #101014;\n	display: flex; align-items: center; justify-content: center; overflow: hidden;\n	min-width: 240px;\n}\n#ptr_frame { position: relative; flex: 0 0 auto; background: #20242b; overflow: hidden; }\n#ptr_frame canvas {\n	width: 100%; height: 100%; object-fit: contain;\n	image-rendering: auto; cursor: grab;\n	background-image: linear-gradient(45deg, #2a2a30 25%, transparent 25%),\n		linear-gradient(-45deg, #2a2a30 25%, transparent 25%),\n		linear-gradient(45deg, transparent 75%, #2a2a30 75%),\n		linear-gradient(-45deg, transparent 75%, #2a2a30 75%);\n	background-size: 16px 16px;\n	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;\n}\n#ptr_raster_canvas { position: absolute; inset: 0; }\n#ptr_canvas { position: absolute; inset: 0; }\n#ptr_viewport canvas.dragging { cursor: grabbing; }\n#ptr_overlay {\n	position: absolute; left: 8px; top: 8px; pointer-events: none;\n	font-size: 11px; color: #fff; text-shadow: 0 1px 3px #000;\n	background: rgba(0,0,0,0.45); padding: 3px 7px; border-radius: 3px;\n}\n#ptr_watermark {\n	position: absolute; left: 12px; bottom: 10px; pointer-events: none;\n	font-family: sans-serif; line-height: 1; white-space: nowrap;\n	text-shadow: 0 1px 3px rgba(0,0,0,0.6);\n}\n#ptr_sidebar {\n	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;\n	background: var(--color-ui); border-left: 1px solid var(--color-border);\n}\n.ptr_stagepanes { flex: 1 1 auto; overflow-y: auto; padding: 10px; min-width: 0; }\n.ptr_stagepane[hidden] { display: none; }\n.ptr_summary { display: grid; gap: 6px; margin: 4px 0 10px; }\n.ptr_summary_line { padding: 6px 8px; border-radius: 4px; background: var(--color-ui); font-size: 11px; line-height: 1.4; color: var(--color-text); }\n.ptr_time { display: block; padding: 2px 0 2px 104px; color: var(--color-light); font-variant-numeric: tabular-nums; }\n.ptr_btn:disabled { opacity: 0.45; cursor: not-allowed; }\n.ptr_tabs {\n	flex: 0 0 42px; display: flex; flex-direction: column; align-items: stretch;\n	padding: 6px 0; gap: 2px; background: var(--color-back);\n	border-right: 1px solid var(--color-border); overflow-y: auto;\n}\n.ptr_tab {\n	width: 100%; min-width: 0; height: 38px; display: flex; align-items: center; justify-content: center;\n	background: transparent; border: none; cursor: pointer; position: relative;\n	color: var(--color-subtle_text); padding: 0; box-shadow: none;\n}\n.ptr_tab .material-icons { font-size: 19px; max-width: 19px; }\n.ptr_tab:hover { color: var(--color-text); background: var(--color-selected); }\n.ptr_tab.active { color: var(--color-light); background: var(--color-selected); }\n.ptr_tab.active::before {\n	content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;\n	background: var(--color-accent); border-radius: 0 2px 2px 0;\n}\n.ptr_tabpanes { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 10px; min-width: 0; }\n.ptr_tabpane { display: none; }\n.ptr_tabpane.active { display: block; }\n.ptr_card {\n	background: var(--color-back); border: 1px solid var(--color-border);\n	border-radius: 6px; padding: 9px 10px 10px; margin-bottom: 10px;\n}\n.ptr_card_head {\n	display: flex; align-items: center; gap: 6px; margin-bottom: 7px;\n	font-size: 12px; font-weight: 600; color: var(--color-light);\n}\n.ptr_card_head .material-icons { font-size: 16px; max-width: 16px; opacity: 0.85; }\n.ptr_row {\n	display: flex; align-items: center; gap: 6px; margin: 5px 0; min-height: 22px;\n}\n.ptr_row > label { flex: 0 0 96px; font-size: 12px; color: var(--color-text); }\n.ptr_row > .ptr_ctrl { flex: 1 1 auto; display: flex; align-items: center; gap: 5px; min-width: 0; }\n.ptr_row input[type=range] { flex: 1 1 auto; min-width: 40px; }\n.ptr_row input[type=number] {\n	width: 56px; flex: 0 0 56px; background: var(--color-ui);\n	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;\n	padding: 1px 3px; font-size: 11px;\n}\n.ptr_row input[type=color] { width: 32px; height: 20px; padding: 0; border: 1px solid var(--color-border); background: none; border-radius: 3px; }\n.ptr_row input[type=text] {\n	flex: 1 1 auto; min-width: 0; background: var(--color-ui);\n	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;\n	padding: 2px 6px; font-size: 12px;\n}\n.ptr_row select {\n	flex: 1 1 auto; min-width: 0; background: var(--color-ui); color: var(--color-text);\n	border: 1px solid var(--color-border); border-radius: 3px; padding: 2px; font-size: 12px;\n}\n.ptr_note { font-size: 11px; color: var(--color-subtle_text); margin: 4px 2px 2px; line-height: 1.4; }\n#ptr_footer {\n	display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px;\n	border-top: 1px solid var(--color-border); background: var(--color-ui);\n}\n#ptr_progress { flex: 1 1 auto; height: 6px; background: var(--color-back); border-radius: 3px; overflow: hidden; margin: 0 8px; }\n#ptr_progress > div { height: 100%; width: 0%; background: var(--color-accent); transition: width .1s linear; }\n#ptr_status { width: 100%; font-size: 11px; color: var(--color-subtle_text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\n.ptr_btn {\n	background: var(--color-button); color: var(--color-text); border: 1px solid var(--color-border);\n	border-radius: 4px; padding: 4px 11px; cursor: pointer; font-size: 12px; white-space: nowrap;\n	display: inline-flex; align-items: center; gap: 5px;\n}\n.ptr_btn .material-icons { font-size: 15px; max-width: 15px; }\n.ptr_btn:hover { background: var(--color-selected); }\n.ptr_btn.accent { background: var(--color-accent); color: var(--color-accent_text); border-color: var(--color-accent); }\n.ptr_iconbtn {\n	width: 27px; min-width: 0; height: 27px; flex: 0 0 27px; display: flex; align-items: center; justify-content: center;\n	background: transparent; color: var(--color-text); border: 1px solid transparent;\n	border-radius: 4px; cursor: pointer; padding: 0; box-shadow: none;\n}\n.ptr_iconbtn .material-icons { font-size: 17px; max-width: 17px; }\n.ptr_iconbtn:hover { background: var(--color-selected); border-color: var(--color-border); }\n.ptr_presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }\n.ptr_presets .ptr_btn { padding: 2px 7px; font-size: 11px; }\n.ptr_dialog_root .dialog_content { margin: 0 !important; padding: 0 !important; overflow: hidden !important; height: 100% !important; max-height: none !important; box-sizing: border-box; }\n.ptr_dialog_root .dialog_wrapper { min-height: 0; }\n.ptr_dialog_root .dialog_handle { cursor: move; }\n#ptr_matlist { margin-top: 4px; }\n.ptr_mat {\n	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;\n	background: var(--color-ui);\n}\n.ptr_mat > .ptr_mat_head { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 3px; font-weight: 600; }\n.ptr_mat > .ptr_mat_head img { width: 20px; height: 20px; image-rendering: pixelated; background: #0006; border-radius: 3px; }\n";
 
   // plugins/georenderer/src/index.js
   var action = null;
@@ -3666,7 +3820,7 @@
       "",
       "官方更新地址：https://github.com/Null-K/blockbench-plugins"
     ].join("\n"),
-    version: "1.5.1",
+    version: "2.0.0",
     min_version: "4.8.0",
     variant: "both",
     tags: ["Rendering", "Preview"],

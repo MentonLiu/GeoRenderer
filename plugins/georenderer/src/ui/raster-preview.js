@@ -21,6 +21,9 @@ export class RasterPreview {
 		this.groundMap = null;
 		this.floor.rotation.x = -Math.PI / 2;
 		this.scene.add(this.floor);
+		this.groundDisk = new THREE.Mesh(new THREE.CircleGeometry(1, 64), this.floor.material);
+		this.groundDisk.rotation.x = -Math.PI / 2;
+		this.scene.add(this.groundDisk);
 		this.model = new THREE.Group();
 		this.ownedMaterials = [];
 		this.scene.add(this.model);
@@ -101,15 +104,22 @@ export class RasterPreview {
 		target.position.set(...cam.pos);
 		target.lookAt(...cam.target);
 		this.grid.visible = PTR.step === 'camera';
-		this.floor.visible = PTR.step !== 'camera' && !!settings.ground_on;
+		this.floor.visible = PTR.step !== 'camera' && !!settings.ground_on && !(settings.ground_radius > 0);
+		this.groundDisk.visible = PTR.step !== 'camera' && !!settings.ground_on && settings.ground_radius > 0;
 		this.floor.position.y = settings.ground_y;
+		this.groundDisk.position.y = settings.ground_y;
+		if (this.groundDisk.visible) this.groundDisk.scale.setScalar(settings.ground_radius);
 		this.floor.material.color.set(settings.ground_color);
 		this.floor.material.roughness = settings.ground_rough;
 		this.floor.material.metalness = settings.ground_metal;
+		this.floor.material.transparent = !!settings.ground_catcher;
+		this.floor.material.opacity = settings.ground_catcher ? 0.25 : 1;
 		if (this.groundMap) {
 			const repeat = 2000 / Math.max(0.01, settings.ground_texture_scale || 1);
 			this.groundMap.repeat.set(repeat, repeat);
 		}
+		const daylight = Math.max(0.1, Math.min(1, (Math.sin((settings.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
+		this.ambient.intensity = PTR.step === 'camera' ? 1.2 : 0.2 + daylight * Math.max(0, settings.env_intensity);
 		this.sun.visible = PTR.step !== 'camera' && !!settings.sun_enable;
 		const dir = sunDirection(settings);
 		this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
@@ -118,7 +128,7 @@ export class RasterPreview {
 		this.scene.background = PTR.step !== 'camera' && settings.bg_mode === 'transparent' ? null
 			: PTR.step !== 'camera' && PTR.sceneCubemap && settings.bg_mode === 'env'
 			? PTR.sceneCubemap
-			: new THREE.Color(PTR.step === 'camera' ? '#252b34' : settings.bg_mode === 'color' ? settings.bg_color : settings.sky_horizon);
+			: new THREE.Color(PTR.step === 'camera' ? '#252b34' : settings.bg_mode === 'color' ? settings.bg_color : settings.sky_horizon).multiplyScalar(PTR.step === 'camera' || settings.bg_mode === 'color' ? 1 : 0.12 + 0.88 * daylight);
 		this.renderer.render(this.scene, target);
 	}
 
@@ -145,6 +155,7 @@ export class RasterPreview {
 		for (const material of this.ownedMaterials) material.dispose();
 		this.ownedMaterials = [];
 		this.floor.geometry.dispose();
+		this.groundDisk.geometry.dispose();
 		this.floor.material.dispose();
 		if (this.groundMap) this.groundMap.dispose();
 		this.renderer.dispose();

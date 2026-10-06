@@ -7,6 +7,7 @@ import { rebuildScene, showError } from './render-loop.js';
 import { PTR, saveSettings } from './state.js';
 import { applyPreset, applyTimeOfDay, formatClock, SCENE_PRESETS } from '../scene/presets.js';
 import { loadBlockbenchScene } from '../scene/blockbench-scene.js';
+import { buildExportPanel, updateExportSummary } from './export-panel.js';
 
 function makeGroundTextureRow() {
 	const select = el('select');
@@ -64,6 +65,7 @@ export function buildSidebar() {
 		if (PTR.cam.syncFromPreview()) {
 			PTR.settings.fov = PTR.cam.fov;
 			PTR.settings.ortho = PTR.cam.ortho;
+			PTR.settings.camera_distance = PTR.cam.distance;
 			syncControls();
 			saveSettings();
 			if (PTR.tracer) PTR.tracer.reset();
@@ -81,6 +83,9 @@ export function buildSidebar() {
 			}
 		}
 		if (PTR.tracer) PTR.tracer.reset();
+		PTR.settings.camera_distance = PTR.cam.distance;
+		syncControls();
+		saveSettings();
 	});
 	camBtns.appendChild(btnSync);
 	camBtns.appendChild(btnFrame);
@@ -90,6 +95,7 @@ export function buildSidebar() {
 			camBtns,
 			rowCheck('正交投影', 'ortho'),
 			rowSlider('FOV', 'fov', 5, 120, 1, 0),
+			rowSlider('镜头距离', 'camera_distance', 0.5, 2000, 0.5, 1),
 			rowCheck('自动跟随主视图', 'auto_sync'),
 		]),
 		card('景深', 'filter_center_focus', [
@@ -114,7 +120,10 @@ export function buildSidebar() {
 			PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
 			syncControls();
 			saveSettings();
-			try { if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, null); } catch (err) { showError(err); }
+			try {
+				if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, null);
+				else if (PTR.tracer) PTR.needsRebuild = true;
+			} catch (err) { showError(err); }
 			try {
 				const builtIn = await loadBlockbenchScene(id);
 				if (request !== PTR.scenePresetRequest) return;
@@ -124,7 +133,8 @@ export function buildSidebar() {
 					PTR.customEnvName = preset.label;
 					PTR.settings.env_mode = 'image';
 					PTR.nodes.sceneSource.textContent = '使用 Blockbench 内置“' + preset.label + '”环境贴图';
-					if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+					if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+					else if (PTR.tracer) PTR.needsRebuild = true;
 				} else {
 					PTR.nodes.sceneSource.textContent = '内置贴图不可用，使用“' + preset.label + '”程序化氛围';
 				}
@@ -153,7 +163,10 @@ export function buildSidebar() {
 		PTR.customEnvName = '';
 		PTR.nodes.envName.textContent = '(未载入)';
 		if (PTR.settings.env_mode === 'image') { PTR.settings.env_mode = 'sky'; syncControls(); }
-		try { if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, null); } catch (err) { showError(err); }
+		try {
+			if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, null);
+			else if (PTR.tracer) PTR.needsRebuild = true;
+		} catch (err) { showError(err); }
 	});
 	envBtns.appendChild(btnLoad);
 	envBtns.appendChild(btnClear);
@@ -178,7 +191,7 @@ export function buildSidebar() {
 		]),
 		card('太阳', 'brightness_high', [
 			rowCheck('启用太阳', 'sun_enable'),
-			rowSlider('太阳高度', 'sun_elevation', -10, 90, 0.5, 1),
+			rowSlider('太阳高度', 'sun_elevation', -90, 90, 0.5, 1),
 			rowSlider('太阳方位', 'sun_azimuth', 0, 360, 1, 0),
 			rowSlider('太阳角直径', 'sun_angle', 0.25, 45, 0.05, 2),
 			rowSlider('太阳强度', 'sun_intensity', 0, 40, 0.1, 2),
@@ -267,12 +280,10 @@ export function buildSidebar() {
 		{ id: 'camera', cards: [resolutionCard, ...cameraCards, ...materialCards] },
 		{ id: 'scene', cards: envCards },
 		{ id: 'preview', cards: [...renderCards, ...postCards] },
-		{ id: 'export', cards: [card('最终导出', 'save_alt', [
-			rowNumber('成片采样数', 'final_samples', 1, 100000, 1),
-			el('div', { class: 'ptr_note', text: '确认参数与画面后，点击下方“开始最终渲染”。' }),
-		])] },
+		{ id: 'export', cards: buildExportPanel() },
 	]);
 	buildGroupList();
 	buildMaterialList();
+	updateExportSummary();
 	return stages;
 }

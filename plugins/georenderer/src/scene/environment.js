@@ -124,6 +124,8 @@ export function generateSkyPixels(settings) {
 	const sun = sunDirection(settings);
 	const glowPower = 8 + 260 * (1 - haze);
 	const glowStrength = 0.35 + 2.5 * haze;
+	const daylight = clamp((Math.sin(((settings.time_of_day ?? 12) - 6) * Math.PI / 12) + 0.2) / 1.2, 0, 1);
+	const skyExposure = mode === 'sky' ? 0.08 + daylight * 0.92 : 1;
 
 	for (let y = 0; y < h; y++) {
 		const theta = ((y + 0.5) / h) * Math.PI;
@@ -164,7 +166,7 @@ export function generateSkyPixels(settings) {
 				}
 			}
 
-			out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = 1;
+			out[o] = r * skyExposure; out[o + 1] = g * skyExposure; out[o + 2] = b * skyExposure; out[o + 3] = 1;
 		}
 	}
 	return out;
