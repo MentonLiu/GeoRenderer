@@ -1,4 +1,5 @@
 import { sunDirection } from '../scene/environment.js';
+import { groupChainForElement, resolveMaterialOverride } from '../scene/group-overrides.js';
 import { PTR } from './state.js';
 
 // A separate THREE renderer keeps the first two steps responsive without
@@ -17,9 +18,11 @@ export class RasterPreview {
 		this.grid = new THREE.GridHelper(256, 32, 0x5b6874, 0x353d48);
 		this.scene.add(this.grid);
 		this.floor = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.MeshStandardMaterial({ color: 0xa8a8a8, roughness: 0.9 }));
+		this.groundMap = null;
 		this.floor.rotation.x = -Math.PI / 2;
 		this.scene.add(this.floor);
 		this.model = new THREE.Group();
+		this.ownedMaterials = [];
 		this.scene.add(this.model);
 		this.raf = 0;
 		this.running = false;
@@ -28,12 +31,32 @@ export class RasterPreview {
 
 	refreshModel() {
 		this.model.clear();
+		for (const material of this.ownedMaterials) material.dispose();
+		this.ownedMaterials = [];
 		if (typeof Canvas !== 'undefined' && Canvas.scene) Canvas.scene.updateMatrixWorld(true);
 		const elements = (typeof Outliner !== 'undefined' && Outliner.elements) || [];
 		for (const element of elements) {
 			const mesh = element && element.mesh;
 			if (!mesh || element.visibility === false || mesh.visible === false) continue;
 			const clone = mesh.clone(true);
+			const override = resolveMaterialOverride(null, groupChainForElement(element), null, PTR.groupOverrides);
+			if (Object.keys(override).length) {
+				clone.traverse(object => {
+					if (!object.isMesh || !object.material) return;
+					const customize = material => {
+						const copy = material.clone();
+						if (override.roughness != null && 'roughness' in copy) copy.roughness = override.roughness;
+						if (override.metalness != null && 'metalness' in copy) copy.metalness = override.metalness;
+						if (override.emissive != null && copy.emissive) {
+							copy.emissive.set(override.emissive_color || '#ffffff');
+							copy.emissiveIntensity = override.emissive;
+						}
+						this.ownedMaterials.push(copy);
+						return copy;
+					};
+					object.material = Array.isArray(object.material) ? object.material.map(customize) : customize(object.material);
+				});
+			}
 			clone.matrix.copy(mesh.matrixWorld);
 			clone.matrixAutoUpdate = false;
 			this.model.add(clone);
@@ -41,7 +64,15 @@ export class RasterPreview {
 	}
 
 	setGroundTexture(texture) {
-		this.floor.material.map = texture || null;
+		if (this.groundMap) this.groundMap.dispose();
+		const image = texture && (texture.canvas || texture.img);
+		this.groundMap = image ? new THREE.Texture(image) : null;
+		if (this.groundMap) {
+			this.groundMap.wrapS = THREE.RepeatWrapping;
+			this.groundMap.wrapT = THREE.RepeatWrapping;
+			this.groundMap.needsUpdate = true;
+		}
+		this.floor.material.map = this.groundMap;
 		this.floor.material.needsUpdate = true;
 	}
 
@@ -75,12 +106,19 @@ export class RasterPreview {
 		this.floor.material.color.set(settings.ground_color);
 		this.floor.material.roughness = settings.ground_rough;
 		this.floor.material.metalness = settings.ground_metal;
+		if (this.groundMap) {
+			const repeat = 2000 / Math.max(0.01, settings.ground_texture_scale || 1);
+			this.groundMap.repeat.set(repeat, repeat);
+		}
 		this.sun.visible = PTR.step !== 'camera' && !!settings.sun_enable;
 		const dir = sunDirection(settings);
 		this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
 		this.sun.intensity = Math.max(0, settings.sun_intensity / 4);
 		this.sun.color.set(settings.sun_color);
-		this.scene.background = new THREE.Color(PTR.step === 'camera' ? '#252b34' : settings.bg_mode === 'color' ? settings.bg_color : settings.sky_horizon);
+		this.scene.background = PTR.step !== 'camera' && settings.bg_mode === 'transparent' ? null
+			: PTR.step !== 'camera' && PTR.sceneCubemap && settings.bg_mode === 'env'
+			? PTR.sceneCubemap
+			: new THREE.Color(PTR.step === 'camera' ? '#252b34' : settings.bg_mode === 'color' ? settings.bg_color : settings.sky_horizon);
 		this.renderer.render(this.scene, target);
 	}
 
@@ -104,8 +142,11 @@ export class RasterPreview {
 	dispose() {
 		this.stop();
 		this.model.clear();
+		for (const material of this.ownedMaterials) material.dispose();
+		this.ownedMaterials = [];
 		this.floor.geometry.dispose();
 		this.floor.material.dispose();
+		if (this.groundMap) this.groundMap.dispose();
 		this.renderer.dispose();
 	}
 }

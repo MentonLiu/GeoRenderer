@@ -11,6 +11,8 @@ import { buildBVH } from '../plugins/georenderer/src/scene/bvh.js';
 import { packAtlas } from '../plugins/georenderer/src/scene/atlas.js';
 import { buildEnvDistribution, parseHDR } from '../plugins/georenderer/src/scene/environment.js';
 import { STEPS, isTraceStep, stepIndex } from '../plugins/georenderer/src/ui/workflow-state.js';
+import { groupChainForElement, materialKey, resolveMaterialOverride } from '../plugins/georenderer/src/scene/group-overrides.js';
+import { applyPreset, applyTimeOfDay, formatClock } from '../plugins/georenderer/src/scene/presets.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bundle = await readFile(path.join(root, 'plugins/georenderer/georenderer.js'), 'utf8');
@@ -91,6 +93,32 @@ test('workflow exposes four ordered steps and keeps path tracing out of setup', 
   assert.equal(isTraceStep('scene'), false);
   assert.equal(isTraceStep('preview'), true);
   assert.equal(isTraceStep('export'), true);
+});
+
+test('group material overrides stay distinct when groups share a texture', () => {
+  const parent = { uuid: 'outer', parent: null };
+  const child = { uuid: 'inner', parent };
+  const texture = { uuid: 'shared' };
+  const chain = groupChainForElement({ parent: child });
+  assert.deepEqual(chain, ['inner', 'outer']);
+  assert.notEqual(materialKey(texture, chain), materialKey(texture, ['outer']));
+  assert.deepEqual(resolveMaterialOverride(texture, chain,
+    { shared: { roughness: 0.7, emissive: 0 } },
+    { outer: { roughness: 0.4, metalness: 0.2 }, inner: { roughness: 0.1, emissive: 3 } }),
+  { roughness: 0.1, emissive: 3, metalness: 0.2 });
+});
+
+test('scene clock maps midday and midnight to sun direction', () => {
+  const settings = {};
+  assert.equal(applyPreset(settings, 'minecraft_overworld'), true);
+  assert.equal(settings.env_mode, 'sky');
+  applyTimeOfDay(settings, 12);
+  assert.equal(settings.sun_elevation, 70);
+  assert.equal(settings.sun_azimuth, 180);
+  assert.equal(formatClock(12.25), '12:15');
+  applyTimeOfDay(settings, 24);
+  assert.equal(settings.sun_enable, false);
+  assert.equal(formatClock(24), '24:00');
 });
 
 test('Blockbench source modules have no circular or external imports', async () => {

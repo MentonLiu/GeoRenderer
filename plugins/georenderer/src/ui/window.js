@@ -8,6 +8,7 @@ import { exportSettingsToClipboard, importSettingsFromClipboard, resetToDefaults
 import { buildSidebar } from './sidebar.js';
 import { PTR, saveSettings } from './state.js';
 import { RasterPreview } from './raster-preview.js';
+import { applyTimeOfDay, formatClock } from '../scene/presets.js';
 import { STEPS, isTraceStep, stepIndex } from './workflow-state.js';
 
 function attachViewportEvents(canvas) {
@@ -269,10 +270,16 @@ export function openWindow() {
 			PTR.step = 'camera';
 			PTR.finalStarted = false;
 			PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
+			PTR.raster.setGroundTexture(((typeof Texture !== 'undefined' && Texture.all) || []).find(texture => texture.uuid === PTR.settings.ground_texture_uuid));
 			PTR.onSettingChanged = key => {
 				if (key === 'res_width' || key === 'res_height') fitFrame();
 				if (key === 'fov') PTR.cam.fov = PTR.settings.fov;
 				if (key === 'ortho') PTR.cam.ortho = !!PTR.settings.ortho;
+				if (key === 'time_of_day') {
+					applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
+					if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
+				}
+				if (key === 'ground_texture_uuid' && PTR.raster) PTR.raster.setGroundTexture((Texture.all || []).find(texture => texture.uuid === PTR.settings.ground_texture_uuid));
 			};
 			PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
 			PTR.frameResizeObs.observe(PTR.nodes.viewport);

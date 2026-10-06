@@ -3,16 +3,30 @@ import { clamp, hexToLinear } from '../core/math.js';
 import { createAtlasTexture } from '../gpu/webgl.js';
 import { packAtlas } from './atlas.js';
 import { MF_ADDITIVE, MF_EMIS_CUSTOM_COLOR, MF_EMIS_MAIN_COLOR, MF_FULLBRIGHT, MF_HAS_COLOR, MF_HAS_EMISSIVE_MAP, MF_HAS_MER, MF_HAS_NORMAL, MF_WRAP_REPEAT, getMaterialSide, textureSource } from './geometry.js';
+import { materialKey, resolveMaterialOverride } from './group-overrides.js';
 
-export function buildMaterials(gl, texRefs, settings, overrides) {
-	const slotList = [{ texture: null, uuid: '__none__' }];
-	const slotOfUuid = new Map();
+export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, groupOverrides) {
+	const slotList = [];
+	const slotOfKey = new Map();
 	for (let i = 0; i < texRefs.length; i++) {
 		const tex = texRefs[i];
-		if (!tex) continue;
-		if (!slotOfUuid.has(tex.uuid)) {
-			slotOfUuid.set(tex.uuid, slotList.length);
-			slotList.push({ texture: tex, uuid: tex.uuid });
+		const groupChain = groupRefs[i] || [];
+		const key = materialKey(tex, groupChain);
+		if (!slotOfKey.has(key)) {
+			slotOfKey.set(key, slotList.length);
+			slotList.push({ texture: tex, uuid: tex ? tex.uuid : '__none__', groupChain });
+		}
+	}
+	let groundSlot = -1;
+	if (settings.ground_texture_uuid && typeof Texture !== 'undefined') {
+		const groundTexture = (Texture.all || []).find(texture => texture.uuid === settings.ground_texture_uuid);
+		if (groundTexture) {
+			const key = materialKey(groundTexture, []);
+			if (!slotOfKey.has(key)) {
+				slotOfKey.set(key, slotList.length);
+				slotList.push({ texture: groundTexture, uuid: groundTexture.uuid, groupChain: [] });
+			}
+			groundSlot = slotOfKey.get(key);
 		}
 	}
 
@@ -42,7 +56,7 @@ export function buildMaterials(gl, texRefs, settings, overrides) {
 		slot.group = group;
 		slot.side = getMaterialSide(colorTex || tex, settings.render_sides);
 
-		const slotOv = (overrides && overrides[tex.uuid]) || {};
+		const slotOv = resolveMaterialOverride(tex, slot.groupChain, overrides, groupOverrides);
 		let emisTex = null;
 		if (slotOv.emissive_map) {
 			const allTex = (typeof Texture !== 'undefined' ? Texture.all : []) || [];
@@ -141,7 +155,7 @@ export function buildMaterials(gl, texRefs, settings, overrides) {
 	slotList.forEach((slot, i) => {
 		const o = i * MAT_TEXELS * 4;
 		const tex = slot.texture;
-		const ov = (tex && overrides && overrides[tex.uuid]) || {};
+		const ov = resolveMaterialOverride(tex, slot.groupChain, overrides, groupOverrides);
 
 		const hasMER = !!slot.mer;
 		const hasEmissiveMap = !!slot.emissiveMap;
@@ -157,6 +171,9 @@ export function buildMaterials(gl, texRefs, settings, overrides) {
 		if (!hasMER && hasEmissiveMap && slot.emissiveColorMain) flags |= MF_EMIS_MAIN_COLOR;
 		if (!hasMER && hasEmissiveMap && slot.emissiveColorCustom) flags |= MF_EMIS_CUSTOM_COLOR;
 		if (!hasMER && !hasEmissiveMap && emisVal > 0) flags |= MF_FULLBRIGHT;
+		if (ov.emissive != null) flags |= 512;
+		if (ov.roughness != null) flags |= 1024;
+		if (ov.metalness != null) flags |= 2048;
 		if (tex && tex.render_mode === 'additive') flags |= MF_ADDITIVE;
 		if (!tex || tex.wrap_mode !== 'clamp') flags |= MF_WRAP_REPEAT;
 
@@ -189,6 +206,7 @@ export function buildMaterials(gl, texRefs, settings, overrides) {
 		matData[o + 19] = 0;
 
 		if (emisVal <= 0) slot.emissive = false;
+		else if (ov.emissive != null) slot.emissive = true;
 		else if (hasMER) slot.emissive = emissiveSlots.has(i);
 		else if (hasEmissiveMap) slot.emissive = emissiveMapSlots.has(i);
 		else slot.emissive = true;
@@ -196,9 +214,11 @@ export function buildMaterials(gl, texRefs, settings, overrides) {
 
 	return {
 		slotList: slotList,
-		slotOfUuid: slotOfUuid,
+		slotOfKey: slotOfKey,
+		groundRect: groundSlot >= 0 && slotList[groundSlot].color ? slotList[groundSlot].rect : null,
 		matData: matData,
 		matCount: slotList.length,
+		textureCount: new Set(texRefs.filter(Boolean).map(texture => texture.uuid)).size,
 		atlasColor: texColor,
 		atlasMER: texMER,
 		atlasNormal: texNRM,

@@ -12,7 +12,7 @@ export function rebuildScene() {
 	const t = PTR.tracer;
 	if (!t || !PTR.open) return;
 	try {
-		const scene = t.buildScene(PTR.settings, PTR.overrides);
+		const scene = t.buildScene(PTR.settings, PTR.overrides, PTR.groupOverrides);
 		PTR.stale = false;
 		if (PTR.refreshMaterialList) PTR.refreshMaterialList();
 		updateStatus(scene);

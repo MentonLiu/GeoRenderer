@@ -116,8 +116,8 @@ export function buildStages(stages) {
 }
 
 function onSettingChanged(key) {
-	saveSettings();
 	if (PTR.onSettingChanged) PTR.onSettingChanged(key);
+	saveSettings();
 	const kind = CHANGE_KIND[key] || 'reset';
 	const t = PTR.tracer;
 	if (!t) return;
