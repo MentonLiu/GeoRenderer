@@ -30,15 +30,17 @@ function makeGroundTextureRow() {
 export function buildSidebar() {
 	PTR.controls = [];
 
-	const renderCards = [
-		card('分辨率与采样', 'photo_size_select_large', [
+	const resolutionCard = card('成片尺寸', 'photo_size_select_large', [
 			rowSelect('分辨率', 'res_mode', { fit: '自适应窗口', custom: '自定义' }),
 			rowNumber('宽度', 'res_width', 32, 8192, 1),
 			rowNumber('高度', 'res_height', 32, 8192, 1),
-			rowSelect('当前模式', 'render_mode', { preview: '预览（低采样）', final: '成片渲染' }),
+			el('div', { class: 'ptr_note', text: '画面左侧按最终长宽比取景；最终渲染使用这里的尺寸。' }),
+		]);
+	const renderCards = [
+		card('预览质量', 'preview', [
+			rowSlider('预览比例', 'preview_scale', 0.25, 1, 0.05, 2),
 			rowNumber('预览采样数', 'preview_samples', 1, 100000, 1),
-			rowNumber('成片采样数', 'final_samples', 1, 100000, 1),
-			el('div', { class: 'ptr_note', text: '调试时可以使用预览模式，渲染速度更快。确认效果后切到“成片渲染”获取更清晰的图片。' }),
+			el('div', { class: 'ptr_note', text: '预览使用缩小后的目标尺寸；进入最终渲染时恢复成片尺寸。' }),
 		]),
 		card('光线追踪', 'call_split', [
 			rowSlider('最大反弹', 'max_bounce', 1, 16, 1, 0),
@@ -262,10 +264,11 @@ export function buildSidebar() {
 	];
 
 	const stages = buildStages([
-		{ id: 'camera', cards: [...cameraCards, ...materialCards] },
+		{ id: 'camera', cards: [resolutionCard, ...cameraCards, ...materialCards] },
 		{ id: 'scene', cards: envCards },
 		{ id: 'preview', cards: [...renderCards, ...postCards] },
 		{ id: 'export', cards: [card('最终导出', 'save_alt', [
+			rowNumber('成片采样数', 'final_samples', 1, 100000, 1),
 			el('div', { class: 'ptr_note', text: '确认参数与画面后，点击下方“开始最终渲染”。' }),
 		])] },
 	]);

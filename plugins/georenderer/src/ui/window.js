@@ -3,7 +3,7 @@ import { PathTracer } from '../gpu/path-tracer.js';
 import { el } from './dom.js';
 import { saveImage } from './io.js';
 import { buildMaterialList } from './material-panel.js';
-import { applyResolution, closeRenderer, loop, rebuildScene, setInteracting, showError, updateStatus } from './render-loop.js';
+import { applyResolution, closeRenderer, loop, pauseRenderer, rebuildScene, resumeRenderer, setInteracting, showError, updateStatus } from './render-loop.js';
 import { exportSettingsToClipboard, importSettingsFromClipboard, resetToDefaults } from './settings-actions.js';
 import { buildSidebar } from './sidebar.js';
 import { PTR, saveSettings } from './state.js';
@@ -171,14 +171,22 @@ export function setStep(id) {
 			PTR.settings.render_mode = 'preview';
 			PTR.finalStarted = false;
 			try { startRenderer(); } catch (err) { showError(err); }
-		} else if (id === 'preview' && PTR.settings.render_mode !== 'preview') {
-			PTR.settings.render_mode = 'preview';
-			PTR.tracer.reset();
-			PTR.finalStarted = false;
+		} else {
+			if (!PTR.open) resumeRenderer();
+			if (id === 'preview' || !PTR.finalStarted) {
+				if (PTR.settings.render_mode !== 'preview') PTR.tracer.reset();
+				PTR.settings.render_mode = 'preview';
+				PTR.finalStarted = false;
+			}
+			if (PTR.needsRebuild) {
+				PTR.needsRebuild = false;
+				PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+				rebuildScene();
+			}
 		}
 		if (PTR.tracer) applyResolution();
 	} else {
-		if (wasTrace && PTR.tracer) closeRenderer();
+		if (wasTrace && PTR.tracer) pauseRenderer();
 		PTR.finalStarted = false;
 		if (PTR.raster) PTR.raster.start();
 	}
@@ -192,6 +200,7 @@ function startFinal() {
 	PTR.finalStarted = true;
 	PTR.settings.render_mode = 'final';
 	PTR.paused = false;
+	applyResolution();
 	PTR.tracer.reset();
 	PTR.lastFrame = performance.now();
 	PTR.nodes.btnSave.style.display = '';
