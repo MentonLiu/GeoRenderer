@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildGroupList, selectGroup } from '../plugins/georenderer/src/ui/group-panel.js';
+import { buildGroupList, groupUuidForElement, selectGroup } from '../plugins/georenderer/src/ui/group-panel.js';
 import { PTR } from '../plugins/georenderer/src/ui/state.js';
+import { attachWorkspacePicker } from '../plugins/georenderer/src/ui/workspace-picker.js';
 
 class Node {
 	constructor(tag) {
@@ -49,11 +50,13 @@ function descendants(node, predicate) {
 }
 
 test('group outline selects one nested group and edits only that group', t => {
-	const previous = { document: globalThis.document, Group: globalThis.Group, Outliner: globalThis.Outliner };
+	const previous = { document: globalThis.document, Group: globalThis.Group, Outliner: globalThis.Outliner, Preview: globalThis.Preview, step: PTR.step };
 	t.after(() => {
 		globalThis.document = previous.document;
 		globalThis.Group = previous.Group;
 		globalThis.Outliner = previous.Outliner;
+		globalThis.Preview = previous.Preview;
+		PTR.step = previous.step;
 		clearTimeout(PTR.rasterRefreshTimer);
 		PTR.raster = null;
 		PTR.nodes = {};
@@ -96,4 +99,25 @@ test('group outline selects one nested group and edits only that group', t => {
 	const reset = descendants(PTR.nodes.groupList, node => node.tag === 'button' && node.textContent === '重置此组')[0];
 	reset.click();
 	assert.equal(PTR.groupOverrides.child, undefined);
+	assert.equal(groupUuidForElement({ parent: child }), 'child');
+
+	const target = {};
+	const handlers = new Map();
+	const eventRoot = {
+		addEventListener(name, handler) { handlers.set(name, handler); },
+		removeEventListener(name, handler) { assert.equal(handlers.get(name), handler); handlers.delete(name); },
+	};
+	globalThis.Preview = { all: [{ node: { contains: item => item === target }, raycast: () => ({ element: { parent: child } }) }] };
+	PTR.step = 'materials';
+	selectGroup(null);
+	const detach = attachWorkspacePicker(eventRoot);
+	handlers.get('pointerdown')({ button: 0, target, clientX: 20, clientY: 30 });
+	handlers.get('pointerup')({ button: 0, target, clientX: 21, clientY: 31 });
+	assert.equal(PTR.selectedGroupUuid, 'child');
+	selectGroup(null);
+	handlers.get('pointerdown')({ button: 0, target, clientX: 20, clientY: 30 });
+	handlers.get('pointerup')({ button: 0, target, clientX: 50, clientY: 60 });
+	assert.equal(PTR.selectedGroupUuid, null);
+	detach();
+	assert.equal(handlers.size, 0);
 });
