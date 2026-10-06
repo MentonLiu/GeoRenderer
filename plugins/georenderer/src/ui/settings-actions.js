@@ -26,12 +26,16 @@ function applyImportedSettings(payload) {
 	}
 	clearTimeout(PTR.rebuildTimer);
 	const data = payload.data;
+	PTR.scenePresetRequest++;
+	PTR.sceneCubemap = null;
 	for (const k in DEFAULTS) if (data[k] !== undefined) PTR.settings[k] = data[k];
+	PTR.settings.render_mode = 'preview';
+	PTR.finalStarted = false;
 	if (PTR.settings.env_mode === 'image' && !PTR.customEnv) {
 		PTR.settings.env_mode = 'sky';
 	}
 	syncControls();
-	if (PTR.updateModeButton) PTR.updateModeButton();
+	if (PTR.onSettingsLoaded) PTR.onSettingsLoaded();
 	saveSettings();
 	const t = PTR.tracer;
 	if (t) {
@@ -62,11 +66,15 @@ export function resetToDefaults() {
 	if (!confirm('确定要将所有渲染设置重置为默认值吗？（不影响材质单独覆盖的参数）')) return;
 	clearTimeout(PTR.rebuildTimer);
 	for (const k in DEFAULTS) PTR.settings[k] = DEFAULTS[k];
+	PTR.settings.render_mode = 'preview';
+	PTR.finalStarted = false;
+	PTR.scenePresetRequest++;
+	PTR.sceneCubemap = null;
 	PTR.customEnv = null;
 	PTR.customEnvName = '';
 	if (PTR.nodes.envName) PTR.nodes.envName.textContent = '(未载入)';
 	syncControls();
-	if (PTR.updateModeButton) PTR.updateModeButton();
+	if (PTR.onSettingsLoaded) PTR.onSettingsLoaded();
 	saveSettings();
 	const t = PTR.tracer;
 	if (t) {

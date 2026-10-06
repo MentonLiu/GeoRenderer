@@ -36,6 +36,7 @@ export const DEFAULTS = {
 
 	ortho: false,
 	fov: 45,
+	camera_distance: 70,
 	aperture: 0,
 	focus_distance: 0,
 	auto_focus: true,

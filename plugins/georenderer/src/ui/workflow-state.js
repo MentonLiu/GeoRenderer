@@ -13,6 +13,16 @@ export function isTraceStep(id) {
 	return id === 'preview' || id === 'export';
 }
 
+export function canExport(step, finalStarted, spp, finalSamples) {
+	return step === 'export' && !!finalStarted && spp >= Math.max(1, finalSamples);
+}
+
+export function validateFinalSize(width, height, maxTextureSize) {
+	if (width > maxTextureSize || height > maxTextureSize) return '最终尺寸超过当前 GPU 的纹理上限';
+	if (width * height > 16_777_216) return '最终画面超过 1600 万像素，请降低宽度或高度';
+	return null;
+}
+
 export function resolveRenderSize(settings, step, finalStarted, viewport, interacting) {
 	let width = settings.res_mode === 'custom' ? settings.res_width : Math.max(64, Math.floor(viewport.width));
 	let height = settings.res_mode === 'custom' ? settings.res_height : Math.max(64, Math.floor(viewport.height));
