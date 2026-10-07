@@ -19,7 +19,7 @@ Plugin.register(PLUGIN_ID, {
 	about: [
 		'在 **视图 → GeoRenderer** 中打开',
 		'',
-		'- 第 1、2 步使用 Blockbench 主工作区；第 3 步可拖拽取景',
+		'- 五步都在独立窗口中完成；前两步可检查模型，第 3 步确定最终镜头',
 		'- 可载入 `.hdr` 或普通图片作为环境贴图',
 		'- “阴影捕捉 + 背景透明” 可导出带投影的透明 PNG',
 		'',
@@ -38,7 +38,7 @@ Plugin.register(PLUGIN_ID, {
 
 		action = new Action('georenderer_open', {
 			name: 'GeoRenderer',
-			description: '在 Blockbench 工作区配置场景并渲染当前模型',
+			description: '在独立窗口配置场景并渲染当前模型',
 			icon: 'auto_awesome',
 			category: 'view',
 			condition: () => typeof Project !== 'undefined' && !!Project,
@@ -50,7 +50,6 @@ Plugin.register(PLUGIN_ID, {
 
 		eventHandler = () => {
 			if (PTR.raster) PTR.raster.refreshModel();
-			PTR.workspaceScene?.refresh();
 			if (PTR.refreshGroundTextures) PTR.refreshGroundTextures();
 			if (PTR.nodes.groupList) buildGroupList();
 			if (PTR.nodes.matlist) buildMaterialList();
