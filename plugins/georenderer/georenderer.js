@@ -2731,6 +2731,12 @@
   function isGroup(node) {
     return typeof Group !== "undefined" && node instanceof Group;
   }
+  var nameOrder = new Intl.Collator("zh-CN", { numeric: true, sensitivity: "base" });
+  function orderedGroups(nodes) {
+    return (nodes || []).filter(isGroup).sort(
+      (a, b) => nameOrder.compare(a.name || "", b.name || "") || String(a.uuid).localeCompare(String(b.uuid))
+    );
+  }
   function groupUuidForElement(element, allGroups = groups()) {
     const chain = groupChainForElement(element);
     return chain.find((uuid) => allGroups.some((group) => group.uuid === uuid)) || null;
@@ -2748,6 +2754,7 @@
     }
     if (PTR.raster) PTR.raster.highlightGroup(PTR.selectedGroupUuid);
     buildGroupList();
+    if (group && PTR.nodes.materialSettings) PTR.nodes.materialSettings.scrollTop = 0;
     const selectedRow = PTR.nodes.groupList?.querySelector(`[data-group-uuid="${PTR.selectedGroupUuid}"]`);
     selectedRow?.scrollIntoView?.({ block: "nearest" });
   }
@@ -2785,7 +2792,7 @@
   function buildInspector(group) {
     const panel = el("div", { class: "ptr_group_inspector" });
     if (!group) {
-      panel.appendChild(el("div", { class: "ptr_note", text: "在左侧模型上点击部件，或在上方大纲中选择组，即可编辑该组材质。" }));
+      panel.appendChild(el("div", { class: "ptr_note", text: "点击左侧模型部件，或在下方大纲中选择组，即可编辑该组材质。" }));
       return panel;
     }
     const head = el("div", { class: "ptr_group_inspector_head" }, [
@@ -2815,20 +2822,22 @@
     return panel;
   }
   function appendOutline(host, nodes, depth) {
-    for (const node of nodes || []) {
-      if (!isGroup(node)) continue;
+    for (const node of orderedGroups(nodes)) {
       const open = !PTR.collapsedGroups.has(node.uuid);
-      const childGroups = (node.children || []).filter(isGroup);
+      const childGroups = orderedGroups(node.children);
+      const branch = el("div", { class: "ptr_outline_branch" });
+      const selected = PTR.selectedGroupUuid === node.uuid;
       const row = el("div", {
-        class: "ptr_outline_row",
+        class: `ptr_outline_row${selected ? " selected" : ""}`,
         role: "treeitem",
         "data-group-uuid": node.uuid,
         "aria-level": String(depth + 1),
-        "aria-selected": String(PTR.selectedGroupUuid === node.uuid),
-        style: { paddingLeft: `${depth * 16}px` }
+        "aria-selected": String(selected)
       });
       if (childGroups.length) {
-        const disclosure = el("button", { type: "button", class: "ptr_outline_disclosure", "aria-label": `${open ? "折叠" : "展开"} ${node.name || "未命名组"}`, "aria-expanded": String(open), text: open ? "▾" : "▸" });
+        const disclosure = el("button", { type: "button", class: "ptr_outline_disclosure", "aria-label": `${open ? "折叠" : "展开"} ${node.name || "未命名组"}`, "aria-expanded": String(open) }, [
+          el("i", { class: "material-icons", text: open ? "expand_more" : "chevron_right" })
+        ]);
         disclosure.addEventListener("click", () => {
           if (open) PTR.collapsedGroups.add(node.uuid);
           else PTR.collapsedGroups.delete(node.uuid);
@@ -2838,7 +2847,6 @@
       } else {
         row.appendChild(el("span", { class: "ptr_outline_spacer" }));
       }
-      const selected = PTR.selectedGroupUuid === node.uuid;
       const button = el("button", { type: "button", class: `ptr_outline_item${selected ? " selected" : ""}` }, [
         el("i", { class: "material-icons", text: open && childGroups.length ? "folder_open" : "folder" }),
         el("span", { text: node.name || "未命名组" })
@@ -2846,18 +2854,25 @@
       button.addEventListener("click", () => selectGroup(node.uuid));
       row.appendChild(button);
       if (PTR.groupOverrides[node.uuid]) row.classList.add("modified");
-      host.appendChild(row);
-      if (open) appendOutline(host, childGroups, depth + 1);
+      branch.appendChild(row);
+      if (open && childGroups.length) {
+        const children = el("div", { class: "ptr_outline_children", role: "group" });
+        appendOutline(children, childGroups, depth + 1);
+        branch.appendChild(children);
+      }
+      host.appendChild(branch);
     }
   }
   function buildGroupList() {
     const host = PTR.nodes.groupList;
-    if (!host) return;
+    const inspector = PTR.nodes.groupInspector;
+    if (!host || !inspector) return;
     const all = groups();
     if (!all.some((group) => group.uuid === PTR.selectedGroupUuid)) PTR.selectedGroupUuid = null;
     const oldTree = host.querySelector(".ptr_outline");
     const scroll = oldTree ? oldTree.scrollTop : 0;
     host.replaceChildren();
+    inspector.replaceChildren(buildInspector(all.find((group) => group.uuid === PTR.selectedGroupUuid)));
     if (!all.length) {
       host.appendChild(el("div", { class: "ptr_note", text: "当前模型没有组；请先在 Blockbench 大纲中建立组。" }));
       return;
@@ -2868,7 +2883,6 @@
     if (!tree.childElementCount) appendOutline(tree, all.filter((group) => !isGroup(group.parent)), 0);
     host.appendChild(tree);
     tree.scrollTop = scroll;
-    host.appendChild(buildInspector(all.find((group) => group.uuid === PTR.selectedGroupUuid)));
   }
 
   // plugins/georenderer/src/ui/settings-actions.js
@@ -3288,11 +3302,9 @@
     ];
     PTR.nodes.matlist = el("div", { id: "ptr_matlist" });
     PTR.nodes.groupList = el("div", { id: "ptr_grouplist" });
-    const materialCards = [
-      card("模型组大纲", "account_tree", [
-        el("div", { class: "ptr_note", text: "选择组或直接点击左侧模型部件。选中的组在下方单独编辑；子组可覆盖父组设置。" }),
-        PTR.nodes.groupList
-      ]),
+    PTR.nodes.groupInspector = el("div", { id: "ptr_groupinspector" });
+    const materialSettings = el("div", { class: "ptr_material_settings" }, [
+      card("选中组的渲染参数", "tune", [PTR.nodes.groupInspector]),
       card("材质默认值", "palette", [
         rowSlider("默认粗糙度", "def_roughness", 0, 1, 0.01, 2),
         rowSlider("默认金属度", "def_metalness", 0, 1, 0.01, 2),
@@ -3307,7 +3319,14 @@
       card("逐纹理覆盖", "texture_add", [
         PTR.nodes.matlist
       ])
-    ];
+    ]);
+    PTR.nodes.materialSettings = materialSettings;
+    const outlineCard = card("模型组大纲", "account_tree", [
+      el("div", { class: "ptr_note", text: "文件夹表示模型组；点击左侧模型也会定位到对应组。" }),
+      PTR.nodes.groupList
+    ]);
+    outlineCard.classList.add("ptr_material_outline");
+    const materialCards = [materialSettings, outlineCard];
     const postCards = [
       card("色调映射", "tune", [
         rowSelect("色调映射", "tone_mapping", { none: "无", reinhard: "Reinhard", aces: "ACES", filmic: "Filmic", agx: "AgX" }),
@@ -4056,8 +4075,13 @@
 	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;
 	background: var(--color-ui); border-left: 1px solid var(--color-border);
 }
-.ptr_stagepanes { flex: 1 1 auto; overflow-y: auto; padding: 10px; min-width: 0; }
+.ptr_stagepanes { flex: 1 1 auto; overflow: hidden; padding: 10px; min-width: 0; }
+.ptr_stagepane { height: 100%; overflow-y: auto; }
+.ptr_stagepane[data-step="materials"] { display: flex; flex-direction: column; overflow: hidden; }
 .ptr_stagepane[hidden] { display: none; }
+.ptr_material_settings { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 2px; }
+.ptr_material_outline { flex: 0 0 32%; min-height: 150px; max-height: 260px; margin-bottom: 0; display: flex; flex-direction: column; }
+#ptr_grouplist { flex: 1 1 auto; min-height: 0; display: flex; }
 .ptr_summary { display: grid; gap: 6px; margin: 4px 0 10px; }
 .ptr_summary_line { padding: 6px 8px; border-radius: 4px; background: var(--color-ui); font-size: 11px; line-height: 1.4; color: var(--color-text); }
 .ptr_time { display: block; padding: 2px 0 2px 104px; color: var(--color-light); font-variant-numeric: tabular-nums; }
@@ -4141,16 +4165,19 @@
 .ptr_dialog_root .dialog_wrapper { min-height: 0; }
 .ptr_dialog_root .dialog_handle { cursor: move; }
 #ptr_matlist { margin-top: 4px; }
-.ptr_outline { max-height: 280px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 3px; background: var(--color-ui); }
-.ptr_outline_row { display: flex; align-items: stretch; min-height: 25px; }
-.ptr_outline_disclosure { flex: 0 0 19px; width: 19px; border: 0; background: transparent; color: var(--color-text); cursor: pointer; padding: 0; }
-.ptr_outline_spacer { flex: 0 0 19px; width: 19px; }
-.ptr_outline_item { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; padding: 2px 5px; font-size: 12px; }
+.ptr_outline { flex: 1 1 auto; min-height: 0; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 3px; background: var(--color-ui); }
+.ptr_outline_children { margin-left: 10px; padding-left: 3px; border-left: 1px solid var(--color-border); }
+.ptr_outline_row { display: flex; align-items: stretch; min-height: 23px; }
+.ptr_outline_disclosure { flex: 0 0 16px; width: 16px; border: 0; background: transparent; color: var(--color-text); cursor: pointer; padding: 0; }
+.ptr_outline_disclosure .material-icons { font-size: 15px; line-height: 23px; }
+.ptr_outline_spacer { flex: 0 0 16px; width: 16px; }
+.ptr_outline_item { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; padding: 1px 3px; font-size: 12px; }
 .ptr_outline_item > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.ptr_outline_item .material-icons { font-size: 15px; width: 17px; flex: 0 0 17px; color: var(--color-subtle_text); }
-.ptr_outline_item:hover, .ptr_outline_item.selected { background: var(--color-selected); }
+.ptr_outline_item .material-icons { font-size: 14px; width: 15px; flex: 0 0 15px; color: var(--color-subtle_text); }
+.ptr_outline_row:hover, .ptr_outline_row.selected { background: var(--color-selected); border-radius: 3px; }
+.ptr_outline_item:hover, .ptr_outline_item.selected { background: transparent; }
 .ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
-.ptr_group_inspector { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--color-border); }
+.ptr_group_inspector { margin: 0; padding: 0; }
 .ptr_group_inspector_head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 6px; font-size: 12px; }
 .ptr_mat {
 	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;
