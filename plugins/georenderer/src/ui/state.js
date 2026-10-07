@@ -35,11 +35,10 @@ export const SKY_PRESETS = {
 
 export const PTR = {
 	dialog: null,
-	panel: null,
-	workspaceScene: null,
 	cameraInitialized: false,
 	tracer: null,
 	cam: new OrbitCam(),
+	inspectionCam: new OrbitCam(),
 	settings: Object.assign({}, DEFAULTS),
 	overrides: {},
 	groupOverrides: {},

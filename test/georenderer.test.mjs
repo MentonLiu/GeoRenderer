@@ -10,7 +10,7 @@ import { DEFAULTS } from '../plugins/georenderer/src/core/config.js';
 import { buildBVH } from '../plugins/georenderer/src/scene/bvh.js';
 import { packAtlas } from '../plugins/georenderer/src/scene/atlas.js';
 import { buildEnvDistribution, generateSkyPixels, parseHDR } from '../plugins/georenderer/src/scene/environment.js';
-import { STEPS, canExport, canMoveCamera, isTraceStep, isWorkspaceStep, resolveRenderSize, stepIndex, validateFinalSize } from '../plugins/georenderer/src/ui/workflow-state.js';
+import { STEPS, canExport, canMoveCamera, canNavigatePreview, isInspectionStep, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from '../plugins/georenderer/src/ui/workflow-state.js';
 import { groupChainForElement, materialKey, resolveMaterialOverride } from '../plugins/georenderer/src/scene/group-overrides.js';
 import { applyPreset, applyTimeOfDay, formatClock } from '../plugins/georenderer/src/scene/presets.js';
 
@@ -99,9 +99,13 @@ test('workflow exposes five ordered steps and locks the camera during rendering'
   assert.equal(canMoveCamera('camera'), true);
   assert.equal(canMoveCamera('preview'), false);
   assert.equal(canMoveCamera('export'), false);
-  assert.equal(isWorkspaceStep('materials'), true);
-  assert.equal(isWorkspaceStep('scene'), true);
-  assert.equal(isWorkspaceStep('camera'), false);
+  assert.equal(isInspectionStep('materials'), true);
+  assert.equal(isInspectionStep('scene'), true);
+  assert.equal(isInspectionStep('camera'), false);
+  assert.equal(canNavigatePreview('materials'), true);
+  assert.equal(canNavigatePreview('scene'), true);
+  assert.equal(canNavigatePreview('camera'), true);
+  assert.equal(canNavigatePreview('preview'), false);
 });
 
 test('preview resolution is reduced until final render begins', () => {
