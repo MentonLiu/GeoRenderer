@@ -133,18 +133,18 @@
 .ptr_dialog_root .dialog_wrapper { min-height: 0; }
 .ptr_dialog_root .dialog_handle { cursor: move; }
 #ptr_matlist { margin-top: 4px; }
-.ptr_outline { flex: 1 1 auto; min-height: 0; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 3px; background: var(--color-ui); }
-.ptr_outline_children { margin-left: 10px; padding-left: 3px; border-left: 1px solid var(--color-border); }
-.ptr_outline_row { display: flex; align-items: stretch; min-height: 23px; }
-.ptr_outline_disclosure { flex: 0 0 16px; width: 16px; border: 0; background: transparent; color: var(--color-text); cursor: pointer; padding: 0; }
-.ptr_outline_disclosure .material-icons { font-size: 15px; line-height: 23px; }
-.ptr_outline_spacer { flex: 0 0 16px; width: 16px; }
-.ptr_outline_item { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; padding: 1px 3px; font-size: 12px; }
-.ptr_outline_item > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.ptr_outline_item .material-icons { font-size: 14px; width: 15px; flex: 0 0 15px; color: var(--color-subtle_text); }
-.ptr_outline_row:hover, .ptr_outline_row.selected { background: var(--color-selected); border-radius: 3px; }
-.ptr_outline_item:hover, .ptr_outline_item.selected { background: transparent; }
-.ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
+#ptr_grouplist .ptr_outline { flex: 1 1 auto; min-height: 0; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 0; background: var(--color-ui); }
+#ptr_grouplist .ptr_outline_children { margin-left: 8px; padding-left: 0; border-left: 1px solid var(--color-border); }
+#ptr_grouplist .ptr_outline_row { display: flex; align-items: center; justify-content: flex-start; height: 19px; min-height: 19px; margin: 0; padding: 0; }
+#ptr_grouplist .ptr_outline_disclosure { display: flex; flex: 0 0 15px !important; align-items: center; justify-content: flex-start !important; width: 15px !important; min-width: 0 !important; height: 19px; min-height: 0; margin: 0 !important; padding: 0 !important; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--color-text); cursor: pointer; }
+#ptr_grouplist .ptr_outline_disclosure .material-icons { font-size: 15px; line-height: 19px; }
+#ptr_grouplist .ptr_outline_spacer { flex: 0 0 15px; width: 15px; }
+#ptr_grouplist .ptr_outline_item { display: flex; flex: 1 1 auto !important; align-items: center; justify-content: flex-start !important; gap: 2px; width: auto; min-width: 0 !important; height: 19px; min-height: 0; margin: 0 !important; padding: 0 !important; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--color-text); text-align: left !important; cursor: pointer; font-size: 12px; line-height: 19px; }
+#ptr_grouplist .ptr_outline_item > span { flex: 0 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
+#ptr_grouplist .ptr_outline_item .material-icons { font-size: 13px; width: 14px; flex: 0 0 14px; color: var(--color-subtle_text); }
+#ptr_grouplist .ptr_outline_row:hover, #ptr_grouplist .ptr_outline_row.selected { background: var(--color-selected); }
+#ptr_grouplist .ptr_outline_item:hover, #ptr_grouplist .ptr_outline_item.selected { background: transparent; }
+#ptr_grouplist .ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
 .ptr_group_inspector { margin: 0; padding: 0; }
 .ptr_group_inspector_head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 6px; font-size: 12px; }
 .ptr_mat {
