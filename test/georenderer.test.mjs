@@ -15,6 +15,7 @@ import { groupChainForElement, materialKey, resolveMaterialOverride } from '../p
 import { applyPreset, applyTimeOfDay, formatClock } from '../plugins/georenderer/src/scene/presets.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const packageInfo = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const bundle = await readFile(path.join(root, 'plugins/georenderer/georenderer.js'), 'utf8');
 const rendererBuild = await build({
   stdin: {
@@ -74,7 +75,7 @@ test('the original reference remains unchanged', async () => {
 test('registration and unload remove Blockbench resources', () => {
   const { plugin, listeners, actions, css } = loadPlugin();
   assert.equal(plugin.id, 'georenderer');
-  assert.equal(plugin.version, '0.1.1');
+  assert.equal(plugin.version, packageInfo.version);
   plugin.onload();
   assert.equal(actions.length, 1);
   assert.equal(actions[0].id, 'georenderer_open');

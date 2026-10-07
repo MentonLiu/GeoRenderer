@@ -4196,19 +4196,20 @@
     title: "GeoRenderer",
     icon: "auto_awesome",
     author: "PuddingKC",
-    description: "使用 GPU 路径追踪实时预览并渲染当前模型",
+    description: "在独立五步窗口中配置材质、场景与镜头，并使用 GPU 路径追踪渲染模型",
     about: [
       "在 **视图 → GeoRenderer** 中打开",
       "",
       "- 五步都在独立窗口中完成；前两步可检查模型，第 3 步确定最终镜头",
+      "- 组大纲按名称排序；点击模型部件可定位并编辑所属组",
       "- 可载入 `.hdr` 或普通图片作为环境贴图",
       "- “阴影捕捉 + 背景透明” 可导出带投影的透明 PNG",
       "",
       "需要支持 WebGL2 与 `EXT_color_buffer_float` 的显卡",
       "",
-      "官方更新地址：https://github.com/Null-K/blockbench-plugins"
+      "项目与更新：https://github.com/MentonLiu/GeoRenderer"
     ].join("\n"),
-    version: "0.1.1",
+    version: "0.1.2",
     min_version: "4.8.0",
     variant: "both",
     tags: ["Rendering", "Preview"],
