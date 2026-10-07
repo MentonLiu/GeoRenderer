@@ -13,6 +13,14 @@ function isGroup(node) {
 	return typeof Group !== 'undefined' && node instanceof Group;
 }
 
+const nameOrder = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+
+function orderedGroups(nodes) {
+	return (nodes || []).filter(isGroup).sort((a, b) =>
+		nameOrder.compare(a.name || '', b.name || '') || String(a.uuid).localeCompare(String(b.uuid))
+	);
+}
+
 export function groupUuidForElement(element, allGroups = groups()) {
 	const chain = groupChainForElement(element);
 	return chain.find(uuid => allGroups.some(group => group.uuid === uuid)) || null;
@@ -32,6 +40,7 @@ export function selectGroup(uuid) {
 	}
 	if (PTR.raster) PTR.raster.highlightGroup(PTR.selectedGroupUuid);
 	buildGroupList();
+	if (group && PTR.nodes.materialSettings) PTR.nodes.materialSettings.scrollTop = 0;
 	const selectedRow = PTR.nodes.groupList?.querySelector(`[data-group-uuid="${PTR.selectedGroupUuid}"]`);
 	selectedRow?.scrollIntoView?.({ block: 'nearest' });
 }
@@ -71,7 +80,7 @@ function numberRow(label, key, min, max, step, fallback, group, reset) {
 function buildInspector(group) {
 	const panel = el('div', { class: 'ptr_group_inspector' });
 	if (!group) {
-		panel.appendChild(el('div', { class: 'ptr_note', text: '在左侧模型上点击部件，或在上方大纲中选择组，即可编辑该组材质。' }));
+		panel.appendChild(el('div', { class: 'ptr_note', text: '点击左侧模型部件，或在下方大纲中选择组，即可编辑该组材质。' }));
 		return panel;
 	}
 	const head = el('div', { class: 'ptr_group_inspector_head' }, [
@@ -101,19 +110,21 @@ function buildInspector(group) {
 }
 
 function appendOutline(host, nodes, depth) {
-	for (const node of nodes || []) {
-		if (!isGroup(node)) continue;
+	for (const node of orderedGroups(nodes)) {
 		const open = !PTR.collapsedGroups.has(node.uuid);
-		const childGroups = (node.children || []).filter(isGroup);
+		const childGroups = orderedGroups(node.children);
+		const branch = el('div', { class: 'ptr_outline_branch' });
+		const selected = PTR.selectedGroupUuid === node.uuid;
 		const row = el('div', {
-			class: 'ptr_outline_row', role: 'treeitem',
+			class: `ptr_outline_row${selected ? ' selected' : ''}`, role: 'treeitem',
 			'data-group-uuid': node.uuid,
 			'aria-level': String(depth + 1),
-			'aria-selected': String(PTR.selectedGroupUuid === node.uuid),
-			style: { paddingLeft: `${depth * 16}px` },
+			'aria-selected': String(selected),
 		});
 		if (childGroups.length) {
-			const disclosure = el('button', { type: 'button', class: 'ptr_outline_disclosure', 'aria-label': `${open ? '折叠' : '展开'} ${node.name || '未命名组'}`, 'aria-expanded': String(open), text: open ? '▾' : '▸' });
+			const disclosure = el('button', { type: 'button', class: 'ptr_outline_disclosure', 'aria-label': `${open ? '折叠' : '展开'} ${node.name || '未命名组'}`, 'aria-expanded': String(open) }, [
+				el('i', { class: 'material-icons', text: open ? 'expand_more' : 'chevron_right' }),
+			]);
 			disclosure.addEventListener('click', () => {
 				if (open) PTR.collapsedGroups.add(node.uuid);
 				else PTR.collapsedGroups.delete(node.uuid);
@@ -123,7 +134,6 @@ function appendOutline(host, nodes, depth) {
 		} else {
 			row.appendChild(el('span', { class: 'ptr_outline_spacer' }));
 		}
-		const selected = PTR.selectedGroupUuid === node.uuid;
 		const button = el('button', { type: 'button', class: `ptr_outline_item${selected ? ' selected' : ''}` }, [
 			el('i', { class: 'material-icons', text: open && childGroups.length ? 'folder_open' : 'folder' }),
 			el('span', { text: node.name || '未命名组' }),
@@ -131,19 +141,26 @@ function appendOutline(host, nodes, depth) {
 		button.addEventListener('click', () => selectGroup(node.uuid));
 		row.appendChild(button);
 		if (PTR.groupOverrides[node.uuid]) row.classList.add('modified');
-		host.appendChild(row);
-		if (open) appendOutline(host, childGroups, depth + 1);
+		branch.appendChild(row);
+		if (open && childGroups.length) {
+			const children = el('div', { class: 'ptr_outline_children', role: 'group' });
+			appendOutline(children, childGroups, depth + 1);
+			branch.appendChild(children);
+		}
+		host.appendChild(branch);
 	}
 }
 
 export function buildGroupList() {
 	const host = PTR.nodes.groupList;
-	if (!host) return;
+	const inspector = PTR.nodes.groupInspector;
+	if (!host || !inspector) return;
 	const all = groups();
 	if (!all.some(group => group.uuid === PTR.selectedGroupUuid)) PTR.selectedGroupUuid = null;
 	const oldTree = host.querySelector('.ptr_outline');
 	const scroll = oldTree ? oldTree.scrollTop : 0;
 	host.replaceChildren();
+	inspector.replaceChildren(buildInspector(all.find(group => group.uuid === PTR.selectedGroupUuid)));
 	if (!all.length) {
 		host.appendChild(el('div', { class: 'ptr_note', text: '当前模型没有组；请先在 Blockbench 大纲中建立组。' }));
 		return;
@@ -154,5 +171,4 @@ export function buildGroupList() {
 	if (!tree.childElementCount) appendOutline(tree, all.filter(group => !isGroup(group.parent)), 0);
 	host.appendChild(tree);
 	tree.scrollTop = scroll;
-	host.appendChild(buildInspector(all.find(group => group.uuid === PTR.selectedGroupUuid)));
 }
