@@ -11,11 +11,14 @@ export const MAX_LEAF_TRIS = 8;
 export const SAH_BINS = 12;
 export const ENV_W = 1024, ENV_H = 512;
 export const MAX_ENV_IMAGE_SIZE = 4096;
+export const MAX_RENDER_BUFFER_SIDE = 1024;
+export const FINAL_TILE_SIDE = 768;
 export const ENV_DIST_W = 256, ENV_DIST_H = 128;
 
 export const INTERACTIVE_MAX_BOUNCE = 2;
 export const INTERACTIVE_PASS_CAP = 8;
 export const IDLE_PASS_CAP = 64;
+export const FINAL_PASS_CAP = 4;
 
 export const DEFAULTS = {
 	res_mode: 'custom',

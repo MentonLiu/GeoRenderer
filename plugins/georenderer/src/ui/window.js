@@ -1,5 +1,7 @@
 import { clamp } from '../core/math.js';
 import { PathTracer } from '../gpu/path-tracer.js';
+import { TiledRender } from '../gpu/tiled-render.js';
+import { MAX_RENDER_BUFFER_SIDE } from '../core/config.js';
 import { syncControls } from './controls.js';
 import { el } from './dom.js';
 import { copyImage, openBlockbenchScreenshot, saveImage } from './io.js';
@@ -87,9 +89,11 @@ function attachViewportEvents(canvas) {
 function buildWindow() {
 	const canvas = el('canvas', { id: 'ptr_canvas' });
 	const rasterCanvas = el('canvas', { id: 'ptr_raster_canvas' });
+	const finalCanvas = el('canvas', { id: 'ptr_final_canvas', style: { display: 'none' } });
 	const overlay = el('div', { id: 'ptr_overlay', text: '准备中（首次加载可能会较为卡顿）…' });
 	const watermark = el('div', { id: 'ptr_watermark' });
-	const frame = el('div', { id: 'ptr_frame' }, [rasterCanvas, canvas, overlay, watermark]);
+	const frame = el('div', { id: 'ptr_frame' }, [rasterCanvas, canvas, finalCanvas, overlay, watermark]);
+	frame.dataset.textureFilter = PTR.settings.filter_linear ? 'linear' : 'nearest';
 	const viewport = el('div', { id: 'ptr_viewport' }, [frame]);
 	const sidebar = buildSidebar();
 	const root = el('div', { id: 'ptr_root' }, [viewport, sidebar]);
@@ -153,7 +157,7 @@ function buildWindow() {
 	}, [nav, root, footer]);
 
 	PTR.nodes = Object.assign(PTR.nodes || {}, {
-		canvas: canvas, rasterCanvas: rasterCanvas, frame: frame,
+		canvas: canvas, rasterCanvas: rasterCanvas, finalCanvas: finalCanvas, frame: frame,
 		overlay: overlay, viewport: viewport, sidebar: sidebar,
 		status: status, bar: bar, wrapper: wrapper, btnPause: btnPause, btnPauseIcon: btnPauseIcon, btnPauseLabel: btnPauseLabel, watermark: watermark,
 		btnStart: btnStart, btnCopy: btnCopy, btnSave: btnSave, btnBlockbench: btnBlockbench,
@@ -185,6 +189,7 @@ function fitFrame() {
 }
 
 function syncSettingsToView() {
+	if (PTR.nodes.frame) PTR.nodes.frame.dataset.textureFilter = PTR.settings.filter_linear ? 'linear' : 'nearest';
 	restoreBlockbenchSceneSelection(PTR.settings.scene_preset);
 	restoreBlockbenchPreviewModelOverrides(PTR.settings.preview_model_overrides);
 	syncBlockbenchScene().catch(showError);
@@ -244,7 +249,8 @@ function ensureRasterPreview() {
 function updateExportActions() {
 	PTR.nodes.btnPauseIcon.textContent = PTR.paused ? 'play_arrow' : 'pause';
 	PTR.nodes.btnPauseLabel.textContent = PTR.paused ? '继续' : '暂停';
-	const ready = canExport(PTR.step, PTR.finalStarted, PTR.tracer ? PTR.tracer.spp : 0, PTR.settings.final_samples);
+	const completed = PTR.finalRender ? PTR.finalRender.completed : !PTR.tracer?.frameSync;
+	const ready = canExport(PTR.step, PTR.finalStarted, PTR.tracer ? PTR.tracer.spp : 0, PTR.settings.final_samples, completed);
 	for (const button of [PTR.nodes.btnCopy, PTR.nodes.btnSave, PTR.nodes.btnBlockbench]) button.disabled = !ready;
 	PTR.nodes.btnStart.disabled = !PTR.tracer || (PTR.finalStarted && !ready);
 	PTR.nodes.btnStart.textContent = ready ? '重新渲染' : PTR.finalStarted ? '渲染中…' : '开始最终渲染';
@@ -252,6 +258,7 @@ function updateExportActions() {
 
 export function setStep(id) {
 	if (stepIndex(id) < 0 || !PTR.dialog) return;
+	if (id !== 'export') clearFinalRender();
 	const wasTrace = isTraceStep(PTR.step);
 	const trace = isTraceStep(id);
 	if (id === 'camera' || trace) initializeCamera();
@@ -267,7 +274,8 @@ export function setStep(id) {
 		PTR.nodes.navButtons[step.id].setAttribute('aria-current', active ? 'step' : 'false');
 		PTR.nodes.stagePanes[step.id].hidden = !active;
 	}
-	PTR.nodes.canvas.style.display = trace ? 'block' : 'none';
+	PTR.nodes.canvas.style.display = trace && !PTR.finalRender ? 'block' : 'none';
+	if (PTR.nodes.finalCanvas) PTR.nodes.finalCanvas.style.display = trace && PTR.finalRender ? 'block' : 'none';
 	PTR.nodes.rasterCanvas.style.display = trace ? 'none' : 'block';
 	PTR.nodes.overlay.style.display = trace ? '' : 'none';
 	PTR.nodes.watermark.style.display = trace ? '' : 'none';
@@ -317,21 +325,42 @@ function startFinal() {
 	const gl = PTR.tracer.gl;
 	const sizeError = validateFinalSize(target.width, target.height, gl.getParameter(gl.MAX_TEXTURE_SIZE));
 	if (sizeError) { showError(new Error(sizeError)); return; }
-	PTR.finalStarted = true;
-	PTR.settings.render_mode = 'final';
-	PTR.paused = false;
 	try {
-		applyResolution();
-		PTR.tracer.reset();
+		clearFinalRender();
+		const limit = Math.min(MAX_RENDER_BUFFER_SIDE, gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
+		const job = new TiledRender(PTR.nodes.finalCanvas, target.width, target.height, PTR.settings, limit);
+		PTR.finalRender = job;
+		if (PTR.tracer.spp > 0) job.context.drawImage(PTR.tracer.canvas, 0, 0, target.width, target.height);
+		PTR.tracer.resize(job.plan.bufferWidth, job.plan.bufferHeight);
+		job.startTile(PTR.tracer);
+		PTR.finalStarted = true;
+		PTR.settings.render_mode = 'final';
+		PTR.paused = false;
+		PTR.passesPerFrame = 1;
+		PTR.spsEma = 0;
+		PTR.lastPasses = 0;
+		PTR.nodes.canvas.style.display = 'none';
+		PTR.nodes.finalCanvas.style.display = 'block';
+		PTR.nodes.btnPause.style.display = '';
 		PTR.lastFrame = performance.now();
 		updateStatus();
 		updateExportActions();
 		saveSettings();
 	} catch (err) {
+		clearFinalRender();
 		PTR.finalStarted = false;
 		PTR.settings.render_mode = 'preview';
+		PTR.nodes.canvas.style.display = 'block';
+		try { applyResolution(); } catch (recoveryError) { showError(recoveryError); }
 		showError(err);
 	}
+}
+
+function clearFinalRender() {
+	PTR.finalRender?.dispose();
+	PTR.finalRender = null;
+	if (PTR.tracer) PTR.tracer.renderWindow = null;
+	if (PTR.nodes.finalCanvas) PTR.nodes.finalCanvas.style.display = 'none';
 }
 
 function startRenderer() {
@@ -390,6 +419,11 @@ export function openWindow() {
 		}
 		if (typeof Group !== 'undefined' && Group.first_selected) selectGroup(Group.first_selected.uuid);
 		PTR.onSettingChanged = key => {
+			if (key === 'final_samples' && PTR.finalRender) {
+				PTR.finalRender.updateSamples(PTR.settings.final_samples, PTR.tracer);
+				updateExportActions();
+			}
+			if (key === 'filter_linear') PTR.nodes.frame.dataset.textureFilter = PTR.settings.filter_linear ? 'linear' : 'nearest';
 			if (key === 'res_width' || key === 'res_height') fitFrame();
 			if (key === 'fov') PTR.cam.fov = PTR.settings.fov;
 			if (key === 'ortho') PTR.cam.ortho = !!PTR.settings.ortho;
@@ -417,6 +451,7 @@ export function closeWindow() {
 	clearTimeout(PTR.interactTimer);
 	clearTimeout(PTR.rebuildTimer);
 	clearTimeout(PTR.rasterRefreshTimer);
+	clearFinalRender();
 	closeRenderer();
 	if (PTR.raster) { PTR.raster.dispose(); PTR.raster = null; }
 	if (PTR.frameResizeObs) { PTR.frameResizeObs.disconnect(); PTR.frameResizeObs = null; }
@@ -435,6 +470,7 @@ export function closeWindow() {
 	PTR.refreshPreviewModels = null;
 	PTR.lockedCamera = null;
 	PTR.cameraInitialized = false;
+	PTR.needsPresent = false;
 	PTR.selectedGroupUuid = null;
 	PTR.controls = [];
 	PTR.nodes = {};

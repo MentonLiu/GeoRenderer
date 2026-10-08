@@ -243,6 +243,8 @@ export class RasterPreview {
 		this.running = false;
 		cancelAnimationFrame(this.raf);
 		this.raf = 0;
+		this.scene.environment = this.scene.background = null;
+		this.environment.release();
 	}
 
 	dispose() {
