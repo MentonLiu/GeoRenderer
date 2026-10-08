@@ -10,6 +10,7 @@ export const DATA_TEX_WIDTH = 1024;
 export const MAX_LEAF_TRIS = 8;
 export const SAH_BINS = 12;
 export const ENV_W = 1024, ENV_H = 512;
+export const MAX_ENV_IMAGE_SIZE = 4096;
 export const ENV_DIST_W = 256, ENV_DIST_H = 128;
 
 export const INTERACTIVE_MAX_BOUNCE = 2;
@@ -44,12 +45,14 @@ export const DEFAULTS = {
 
 	env_mode: 'sky',
 	scene_preset: '',
+	background_preset: '',
 	preview_model_overrides: {},
 	time_of_day: 12,
 	env_intensity: 1.0,
 	env_rotation: 0,
 	bg_mode: 'env',
 	bg_color: '#1b1b20',
+	background_blur: 0,
 
 	sun_enable: true,
 	sun_elevation: 48,

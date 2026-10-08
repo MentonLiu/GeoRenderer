@@ -108,8 +108,7 @@ export function resampleEquirect(src, w, h) {
 	return out;
 }
 
-export function generateSkyPixels(settings) {
-	const w = ENV_W, h = ENV_H;
+export function generateSkyPixels(settings, w = ENV_W, h = ENV_H) {
 	const out = new Float32Array(w * h * 4);
 	const mode = settings.env_mode;
 

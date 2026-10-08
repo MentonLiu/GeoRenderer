@@ -6,18 +6,21 @@ import { PTR, saveSettings } from './state.js';
 import { canExport } from './workflow-state.js';
 
 export function loadEnvFile(file) {
-	const request = ++PTR.scenePresetRequest;
+	const request = ++PTR.backgroundPresetRequest;
 	PTR.sceneCubemap = null;
+	PTR.backgroundScene = null;
 	const name = file.name || '';
 	const reader = new FileReader();
-	reader.onerror = () => { if (request === PTR.scenePresetRequest) showError(new Error('读取文件失败')); };
+	reader.onerror = () => { if (request === PTR.backgroundPresetRequest) showError(new Error('读取文件失败')); };
 	if (/\.hdr$/i.test(name)) {
 		reader.onload = () => {
-			if (request !== PTR.scenePresetRequest) return;
+			if (request !== PTR.backgroundPresetRequest) return;
 			try {
 				PTR.customEnv = parseHDR(reader.result);
 				PTR.customEnvName = name;
 				PTR.customEnvSource = 'file';
+				PTR.settings.background_preset = '';
+				PTR.refreshPreviewBackgrounds?.();
 				PTR.settings.env_mode = 'image';
 				syncControls();
 				PTR.nodes.envName.textContent = name + '  (' + PTR.customEnv.width + '×' + PTR.customEnv.height + ')';
@@ -29,10 +32,10 @@ export function loadEnvFile(file) {
 		reader.readAsArrayBuffer(file);
 	} else {
 		reader.onload = () => {
-			if (request !== PTR.scenePresetRequest) return;
+			if (request !== PTR.backgroundPresetRequest) return;
 			const img = new Image();
 			img.onload = () => {
-				if (request !== PTR.scenePresetRequest) return;
+				if (request !== PTR.backgroundPresetRequest) return;
 				try {
 					const c = document.createElement('canvas');
 					const maxW = 4096;
@@ -52,6 +55,8 @@ export function loadEnvFile(file) {
 					PTR.customEnv = { width: c.width, height: c.height, data: data };
 					PTR.customEnvName = name;
 					PTR.customEnvSource = 'file';
+					PTR.settings.background_preset = '';
+					PTR.refreshPreviewBackgrounds?.();
 					PTR.settings.env_mode = 'image';
 					syncControls();
 					PTR.nodes.envName.textContent = name + '  (' + c.width + '×' + c.height + ')';
@@ -60,7 +65,7 @@ export function loadEnvFile(file) {
 					saveSettings();
 				} catch (err) { showError(err); }
 			};
-			img.onerror = () => { if (request === PTR.scenePresetRequest) showError(new Error('无法解码图片')); };
+			img.onerror = () => { if (request === PTR.backgroundPresetRequest) showError(new Error('无法解码图片')); };
 			img.src = reader.result;
 		};
 		reader.readAsDataURL(file);

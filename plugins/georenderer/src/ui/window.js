@@ -7,7 +7,7 @@ import { buildMaterialList } from './material-panel.js';
 import { selectGroup } from './group-panel.js';
 import { applyResolution, closeRenderer, loop, pauseRenderer, rebuildScene, resumeRenderer, setInteracting, showError, updateStatus } from './render-loop.js';
 import { exportSettingsToClipboard, importSettingsFromClipboard, resetToDefaults } from './settings-actions.js';
-import { buildSidebar, syncBlockbenchScene } from './sidebar.js';
+import { buildSidebar, syncBlockbenchBackground, syncBlockbenchScene } from './sidebar.js';
 import { PTR, saveSettings } from './state.js';
 import { RasterPreview } from './raster-preview.js';
 import { OrbitCam } from './orbit-camera.js';
@@ -114,8 +114,6 @@ function buildWindow() {
 	const btnPause = el('button', { class: 'ptr_btn' }, [btnPauseIcon, btnPauseLabel]);
 	btnPause.addEventListener('click', () => {
 		PTR.paused = !PTR.paused;
-		btnPauseIcon.textContent = PTR.paused ? 'play_arrow' : 'pause';
-		btnPauseLabel.textContent = PTR.paused ? '继续' : '暂停';
 		PTR.lastFrame = performance.now();
 		updateStatus();
 	});
@@ -157,7 +155,7 @@ function buildWindow() {
 	PTR.nodes = Object.assign(PTR.nodes || {}, {
 		canvas: canvas, rasterCanvas: rasterCanvas, frame: frame,
 		overlay: overlay, viewport: viewport, sidebar: sidebar,
-		status: status, bar: bar, wrapper: wrapper, btnPause: btnPause, watermark: watermark,
+		status: status, bar: bar, wrapper: wrapper, btnPause: btnPause, btnPauseIcon: btnPauseIcon, btnPauseLabel: btnPauseLabel, watermark: watermark,
 		btnStart: btnStart, btnCopy: btnCopy, btnSave: btnSave, btnBlockbench: btnBlockbench,
 		toolGroup: toolGroup, footer: footer,
 	});
@@ -190,6 +188,7 @@ function syncSettingsToView() {
 	restoreBlockbenchSceneSelection(PTR.settings.scene_preset);
 	restoreBlockbenchPreviewModelOverrides(PTR.settings.preview_model_overrides);
 	syncBlockbenchScene().catch(showError);
+	syncBlockbenchBackground().catch(showError);
 	PTR.cam.fov = PTR.settings.fov;
 	PTR.cam.ortho = !!PTR.settings.ortho;
 	PTR.cam.distance = PTR.settings.camera_distance;
@@ -243,6 +242,8 @@ function ensureRasterPreview() {
 }
 
 function updateExportActions() {
+	PTR.nodes.btnPauseIcon.textContent = PTR.paused ? 'play_arrow' : 'pause';
+	PTR.nodes.btnPauseLabel.textContent = PTR.paused ? '继续' : '暂停';
 	const ready = canExport(PTR.step, PTR.finalStarted, PTR.tracer ? PTR.tracer.spp : 0, PTR.settings.final_samples);
 	for (const button of [PTR.nodes.btnCopy, PTR.nodes.btnSave, PTR.nodes.btnBlockbench]) button.disabled = !ready;
 	PTR.nodes.btnStart.disabled = !PTR.tracer || (PTR.finalStarted && !ready);
@@ -378,6 +379,7 @@ export function openWindow() {
 		showRenderDialog();
 		ensureRasterPreview();
 		syncBlockbenchScene().catch(showError);
+		syncBlockbenchBackground().catch(showError);
 		if (!PTR.inspectionCam.syncFromPreview()) {
 			const bounds = new THREE.Box3().setFromObject(PTR.raster.model);
 			if (!bounds.isEmpty()) {
@@ -411,6 +413,7 @@ export function openWindow() {
 
 export function closeWindow() {
 	PTR.scenePresetRequest++;
+	PTR.backgroundPresetRequest++;
 	clearTimeout(PTR.interactTimer);
 	clearTimeout(PTR.rebuildTimer);
 	clearTimeout(PTR.rasterRefreshTimer);
@@ -428,6 +431,7 @@ export function closeWindow() {
 	PTR.refreshMaterialList = null;
 	PTR.refreshGroundTextures = null;
 	PTR.refreshPreviewScenes = null;
+	PTR.refreshPreviewBackgrounds = null;
 	PTR.refreshPreviewModels = null;
 	PTR.lockedCamera = null;
 	PTR.cameraInitialized = false;
