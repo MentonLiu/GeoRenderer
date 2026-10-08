@@ -1,38 +1,49 @@
 # GeoRenderer
 
-这是 Blockbench 路径追踪插件 GeoRenderer。逆向时使用的原文件保存在 [`reference/pathtracer.js`](reference/pathtracer.js)；可编辑的实现按职责拆在 [`src/`](src/)；根目录的 [`georenderer.js`](georenderer.js) 是 Blockbench 加载的单文件插件。
+GeoRenderer 是一个 Blockbench 路径追踪插件。本仓库是独立的插件开发工程；Blockbench 加载的文件是 [`plugins/georenderer/georenderer.js`](plugins/georenderer/georenderer.js)，插件 ID 和文件名均为 `georenderer`。原始参考插件保存在 [`reference/pathtracer.js`](reference/pathtracer.js)。
 
-## 构建与检查
+## 开发
 
-需要 Node.js。项目没有第三方构建依赖。
+需要 Node.js 20 或更新版本。
 
 ```sh
+npm ci
 npm run build
 npm run check
 ```
 
-`build` 按编号合并 `src/*.js`，包在原有 IIFE 中，生成根目录的插件文件。`check` 检查构建产物、JavaScript 语法、原始参考文件完整性和关键逻辑。修改源码后重新运行 `npm run build`。Blockbench 应加载根目录的 `georenderer.js`；插件入口会在“视图”及“工具”菜单注册“GeoRenderer”。
+`npm run dev` 会监视源码并重新构建。Blockbench 不会自动重新加载本地插件，修改后需要在 Blockbench 中重新加载 `plugins/georenderer/georenderer.js`。`npm run check` 对构建产物、语法、插件注册/卸载和核心算法执行检查。
 
-## 源码导航
+## 四步工作流
 
-| 文件 | 职责 |
-| --- | --- |
-| `01-config.js` | 插件 ID、GPU 数据常量、默认设置 |
-| `02-gl-utils.js` | 向量运算、着色器编译、纹理与 FBO 创建 |
-| `03-bvh.js` | 三角形 BVH 的分箱 SAH 构建 |
-| `04-geometry.js` | Blockbench 场景几何采集、坐标变换、图集排布 |
-| `05-materials.js` | 颜色/MER/法线/自发光图集和材质记录 |
-| `06-environment.js` | HDR 解析、环境图生成及重要性采样分布 |
-| `07-shaders.js` | WebGL2 路径追踪、降噪和后处理 GLSL |
-| `08-renderer.js` | GPU 资源、场景上传、逐帧渲染与清理 |
-| `09-styles.js`–`13-controls.js` | 界面样式、DOM、相机、设置状态与通用控件 |
-| `14-app.js`–`18-window.js` | 渲染循环、材质面板、侧栏、导入导出与窗口交互 |
-| `19-plugin.js` | Blockbench 注册、菜单动作、事件和卸载 |
+1. **镜头与材质**：左侧为独立的常规 3D 预览，不启动路径追踪。配置最终画幅、镜头、景深，以及按组或按纹理覆盖的材质参数。
+2. **场景**：配置工作室、主世界、末地或下界氛围、00:00～24:00 时间、太阳方向、地面和地面纹理。优先读取 Blockbench 已加载的内置场景贴图；需要额外许可或未能读取时使用程序化氛围。
+3. **预览渲染**：在可调的预览比例下进行 WebGL2 路径追踪，调整采样、光线反弹、降噪和滤镜。
+4. **最终导出**：先核对左侧预览与参数摘要，再开始按最终分辨率渲染。达到目标采样数后可复制图片、另存 PNG，或使用 Blockbench 截图面板。
 
-这些文件按顺序共享同一个 IIFE 词法作用域，因此单独运行某个 `src` 文件不会注册插件。更详细的逆向说明见 [`REVERSE_ENGINEERING.md`](REVERSE_ENGINEERING.md)。
+顶部导航允许随时跳转。返回前两步时路径追踪暂停；再次进入后会同步新的场景和设置。
 
-## 当前验证范围
+## 项目结构
 
-自动检查覆盖构建一致性、注册/卸载、BVH、纹理图集、HDR 解码和环境采样分布。实际的 WebGL2 着色器编译与画面效果需要在支持 `EXT_color_buffer_float` 的 Blockbench 环境里确认。
+```text
+plugins/georenderer/
+├── georenderer.js          Blockbench 加载的单文件构建产物
+├── about.md                插件介绍
+└── src/
+    ├── index.js            Plugin.register 入口和生命周期
+    ├── core/               默认设置、数学工具
+    ├── scene/              几何采集、BVH、纹理图集、材质、环境光
+    ├── gpu/                WebGL2 资源、渲染器、着色器导入
+    ├── shaders/            可独立编辑的 GLSL 源码
+    ├── assets/             CSS
+    └── ui/                 相机、设置、窗口和交互界面
+scripts/build.mjs           esbuild 构建与监视
+test/                       模块与插件产物检查
+reference/                  原插件，仅用于参考
+```
 
-原插件元数据中的作者、版本和更新地址均保留。`pathtracer_preview_settings` 存储键也继续沿用，以读取已有设置。
+源码使用 ES 模块的 `import` / `export` 组织，构建时打包成 Blockbench 所需的单个 IIFE JavaScript 文件。GLSL 与 CSS 作为文本嵌入构建产物；不需要在 Blockbench 中加载其他文件。开发时请修改 `plugins/georenderer/src/`，不要直接编辑生成的 `georenderer.js`。
+
+逆向得到的渲染流程见 [`REVERSE_ENGINEERING.md`](REVERSE_ENGINEERING.md)。Apple GPU 分支的优化说明见 [`APPLE_GPU.md`](APPLE_GPU.md)。当前自动检查不替代 Blockbench 内的 WebGL2 画面与性能测试。
+
+原插件作者与版本信息保留。设置继续使用原来的 `pathtracer_preview_settings` 存储键，以读取已有配置。
