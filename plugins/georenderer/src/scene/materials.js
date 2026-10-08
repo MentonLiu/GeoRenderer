@@ -45,6 +45,15 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 		slot.color = null; slot.mer = null; slot.normal = null;
 		slot.side = 'double';
 		if (!tex) { addAtlasSource(slot, '__none__', 1, 1); return; }
+		if (tex.previewMaterial) {
+			const material = tex.previewMaterial;
+			const image = material.map?.image;
+			slot.color = image && image.width > 0 && image.height > 0 ? image : null;
+			slot.previewMaterial = material;
+			slot.side = material.side === 0 ? 'front' : material.side === 1 ? 'back' : 'double';
+			addAtlasSource(slot, tex.uuid, slot.color?.width || 1, slot.color?.height || 1);
+			return;
+		}
 
 		let group = null;
 		try { group = tex.getGroup ? tex.getGroup() : null; } catch (err) { group = null; }
@@ -166,6 +175,24 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 	slotList.forEach((slot, i) => {
 		const o = i * MAT_TEXELS * 4;
 		const tex = slot.texture;
+		const preview = slot.previewMaterial;
+		if (preview) {
+			const tint = preview.color || { r: 1, g: 1, b: 1 };
+			const basic = !!preview.isMeshBasicMaterial;
+			const emissive = preview.emissive || { r: 0, g: 0, b: 0 };
+			const emissivePower = Math.max(emissive.r, emissive.g, emissive.b) * (preview.emissiveIntensity ?? 1);
+			const emits = basic || emissivePower > 0;
+			let flags = slot.color ? MF_HAS_COLOR : 0;
+			if (preview.map?.wrapS === 1000 || preview.map?.wrapT === 1000) flags |= MF_WRAP_REPEAT;
+			if (emits) flags |= 512;
+			matData.set([tint.r, tint.g, tint.b, flags], o);
+			matData.set([slot.rect.x, slot.rect.y, slot.rect.w, slot.rect.h], o + 4);
+			matData.set([preview.roughness ?? 1, preview.metalness ?? 0, basic ? 1 : (preview.emissiveIntensity ?? 1), 1.5], o + 8);
+			matData.set([0, preview.alphaTest || 0, 1, preview.transparent ? 2 : preview.alphaTest > 0 ? 1 : 0], o + 12);
+			matData.set([basic ? 1 : emissive.r, basic ? 1 : emissive.g, basic ? 1 : emissive.b, preview.opacity ?? 1], o + 16);
+			slot.emissive = emits;
+			return;
+		}
 		const ov = resolveMaterialOverride(tex, slot.groupChain, overrides, groupOverrides);
 
 		const hasMER = !!slot.mer;
@@ -214,7 +241,7 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 		matData[o + 16] = emisColor[0];
 		matData[o + 17] = emisColor[1];
 		matData[o + 18] = emisColor[2];
-		matData[o + 19] = 0;
+		matData[o + 19] = 1;
 
 		if (emisVal <= 0) slot.emissive = false;
 		else if (ov.emissive != null) slot.emissive = true;

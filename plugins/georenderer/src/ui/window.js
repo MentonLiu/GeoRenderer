@@ -7,13 +7,14 @@ import { buildMaterialList } from './material-panel.js';
 import { selectGroup } from './group-panel.js';
 import { applyResolution, closeRenderer, loop, pauseRenderer, rebuildScene, resumeRenderer, setInteracting, showError, updateStatus } from './render-loop.js';
 import { exportSettingsToClipboard, importSettingsFromClipboard, resetToDefaults } from './settings-actions.js';
-import { buildSidebar } from './sidebar.js';
+import { buildSidebar, syncBlockbenchScene } from './sidebar.js';
 import { PTR, saveSettings } from './state.js';
 import { RasterPreview } from './raster-preview.js';
 import { OrbitCam } from './orbit-camera.js';
 import { applyTimeOfDay, formatClock } from '../scene/presets.js';
 import { STEPS, canExport, canMoveCamera, canNavigatePreview, isInspectionStep, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from './workflow-state.js';
 import { updateExportSummary } from './export-panel.js';
+import { restoreBlockbenchPreviewModelOverrides, restoreBlockbenchSceneSelection } from '../scene/blockbench-scene.js';
 
 function attachViewportEvents(canvas) {
 	let dragging = 0;
@@ -186,6 +187,9 @@ function fitFrame() {
 }
 
 function syncSettingsToView() {
+	restoreBlockbenchSceneSelection(PTR.settings.scene_preset);
+	restoreBlockbenchPreviewModelOverrides(PTR.settings.preview_model_overrides);
+	syncBlockbenchScene().catch(showError);
 	PTR.cam.fov = PTR.settings.fov;
 	PTR.cam.ortho = !!PTR.settings.ortho;
 	PTR.cam.distance = PTR.settings.camera_distance;
@@ -287,7 +291,7 @@ export function setStep(id) {
 				PTR.settings.render_mode = 'preview';
 				PTR.finalStarted = false;
 			}
-			if (PTR.needsRebuild) {
+			if (PTR.needsRebuild || !wasTrace) {
 				PTR.needsRebuild = false;
 				PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
 				rebuildScene();
@@ -368,9 +372,12 @@ export function openWindow() {
 		PTR.cameraInitialized = false;
 		PTR.cam = new OrbitCam();
 		PTR.inspectionCam = new OrbitCam();
+		restoreBlockbenchSceneSelection(PTR.settings.scene_preset);
+		restoreBlockbenchPreviewModelOverrides(PTR.settings.preview_model_overrides);
 		buildWindow();
 		showRenderDialog();
 		ensureRasterPreview();
+		syncBlockbenchScene().catch(showError);
 		if (!PTR.inspectionCam.syncFromPreview()) {
 			const bounds = new THREE.Box3().setFromObject(PTR.raster.model);
 			if (!bounds.isEmpty()) {
@@ -403,6 +410,7 @@ export function openWindow() {
 }
 
 export function closeWindow() {
+	PTR.scenePresetRequest++;
 	clearTimeout(PTR.interactTimer);
 	clearTimeout(PTR.rebuildTimer);
 	clearTimeout(PTR.rasterRefreshTimer);
@@ -419,6 +427,8 @@ export function closeWindow() {
 	PTR.needsRebuild = false;
 	PTR.refreshMaterialList = null;
 	PTR.refreshGroundTextures = null;
+	PTR.refreshPreviewScenes = null;
+	PTR.refreshPreviewModels = null;
 	PTR.lockedCamera = null;
 	PTR.cameraInitialized = false;
 	PTR.selectedGroupUuid = null;
