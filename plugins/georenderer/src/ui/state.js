@@ -44,6 +44,8 @@ export const PTR = {
 	groupOverrides: {},
 	sceneCubemap: null,
 	scenePresetRequest: 0,
+	backgroundPresetRequest: 0,
+	backgroundScene: null,
 	customEnv: null,
 	customEnvName: '',
 	customEnvSource: '',
@@ -84,10 +86,15 @@ export function loadSettings() {
 		if (raw) {
 			const data = JSON.parse(raw);
 			for (const k in DEFAULTS) if (data[k] !== undefined) PTR.settings[k] = data[k];
+			migrateBackgroundSelection(data);
 			if (data.__overrides) PTR.overrides = data.__overrides;
 			if (data.__groups) PTR.groupOverrides = data.__groups;
 		}
 	} catch (err) { }
+}
+
+export function migrateBackgroundSelection(data) {
+	if (data.background_preset === undefined) PTR.settings.background_preset = data.scene_preset || '';
 }
 
 export function saveSettings() {

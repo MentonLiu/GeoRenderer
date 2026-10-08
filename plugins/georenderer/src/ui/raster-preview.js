@@ -175,6 +175,7 @@ export class RasterPreview {
 		}
 		const inspection = PTR.step === 'materials' || PTR.step === 'scene';
 		const blockbenchScene = PTR.step === 'materials' ? null : activeBlockbenchScene();
+		const backgroundScene = PTR.step !== 'materials' && settings.env_mode === 'image' && PTR.customEnvSource === 'scene' ? PTR.backgroundScene : null;
 		const cam = (inspection ? PTR.inspectionCam : PTR.cam).state();
 		if (PTR.step === 'scene' && blockbenchScene?.fov && !cam.ortho) cam.fov = blockbenchScene.fov;
 		const target = cam.ortho ? this.orthoCamera : this.camera;
@@ -214,18 +215,16 @@ export class RasterPreview {
 		}
 		const daylight = Math.max(0.1, Math.min(1, (Math.sin((settings.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
 		this.ambient.intensity = 0.2 + daylight * Math.max(0, settings.env_intensity);
-		this.ambient.color.copy(blockbenchScene?.light_color || new THREE.Color(0xffffff));
+		this.ambient.color.copy(backgroundScene?.light_color || new THREE.Color(0xffffff));
 		this.sun.visible = !!settings.sun_enable;
 		const dir = sunDirection(settings);
 		this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
 		this.sun.intensity = Math.max(0, settings.sun_intensity / 4);
 		this.sun.color.set(settings.sun_color);
-		this.scene.fog = blockbenchScene?.fog || null;
+		this.scene.fog = backgroundScene?.fog || null;
 		this.scene.environment = this.environment.sync(settings, PTR.customEnv);
 		this.scene.background = this.grid.visible ? new THREE.Color('#20242b') : settings.bg_mode === 'transparent' ? null
-			: blockbenchScene?.cubemap && settings.bg_mode === 'env'
-			? blockbenchScene.cubemap
-			: new THREE.Color(settings.bg_mode === 'color' ? settings.bg_color : settings.sky_horizon).multiplyScalar(settings.bg_mode === 'color' ? 1 : 0.12 + 0.88 * daylight);
+			: settings.bg_mode === 'color' ? new THREE.Color(settings.bg_color) : this.environment.background;
 		this.renderer.render(this.scene, target);
 	}
 

@@ -7,7 +7,7 @@ import { buildMaterialList } from './material-panel.js';
 import { selectGroup } from './group-panel.js';
 import { applyResolution, closeRenderer, loop, pauseRenderer, rebuildScene, resumeRenderer, setInteracting, showError, updateStatus } from './render-loop.js';
 import { exportSettingsToClipboard, importSettingsFromClipboard, resetToDefaults } from './settings-actions.js';
-import { buildSidebar, syncBlockbenchScene } from './sidebar.js';
+import { buildSidebar, syncBlockbenchBackground, syncBlockbenchScene } from './sidebar.js';
 import { PTR, saveSettings } from './state.js';
 import { RasterPreview } from './raster-preview.js';
 import { OrbitCam } from './orbit-camera.js';
@@ -188,6 +188,7 @@ function syncSettingsToView() {
 	restoreBlockbenchSceneSelection(PTR.settings.scene_preset);
 	restoreBlockbenchPreviewModelOverrides(PTR.settings.preview_model_overrides);
 	syncBlockbenchScene().catch(showError);
+	syncBlockbenchBackground().catch(showError);
 	PTR.cam.fov = PTR.settings.fov;
 	PTR.cam.ortho = !!PTR.settings.ortho;
 	PTR.cam.distance = PTR.settings.camera_distance;
@@ -378,6 +379,7 @@ export function openWindow() {
 		showRenderDialog();
 		ensureRasterPreview();
 		syncBlockbenchScene().catch(showError);
+		syncBlockbenchBackground().catch(showError);
 		if (!PTR.inspectionCam.syncFromPreview()) {
 			const bounds = new THREE.Box3().setFromObject(PTR.raster.model);
 			if (!bounds.isEmpty()) {
@@ -411,6 +413,7 @@ export function openWindow() {
 
 export function closeWindow() {
 	PTR.scenePresetRequest++;
+	PTR.backgroundPresetRequest++;
 	clearTimeout(PTR.interactTimer);
 	clearTimeout(PTR.rebuildTimer);
 	clearTimeout(PTR.rasterRefreshTimer);
@@ -428,6 +431,7 @@ export function closeWindow() {
 	PTR.refreshMaterialList = null;
 	PTR.refreshGroundTextures = null;
 	PTR.refreshPreviewScenes = null;
+	PTR.refreshPreviewBackgrounds = null;
 	PTR.refreshPreviewModels = null;
 	PTR.lockedCamera = null;
 	PTR.cameraInitialized = false;
