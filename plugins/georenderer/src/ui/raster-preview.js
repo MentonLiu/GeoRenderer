@@ -51,10 +51,6 @@ export class RasterPreview {
 			if (!mesh || element.visibility === false || mesh.visible === false) continue;
 			const clone = mesh.clone(true);
 			clone.userData.georendererSourceMesh = mesh;
-			// The preview clone is detached from Blockbench's parent hierarchy, so
-			// its root matrix must remain the source mesh's world matrix. Rebuilding
-			// the local matrix here drops transforms inherited from parent groups.
-			clone.matrixAutoUpdate = false;
 			const groupChain = groupChainForElement(element);
 			clone.traverse(object => { object.userData.georendererGroupChain = groupChain; });
 			const override = resolveMaterialOverride(null, groupChain, null, PTR.groupOverrides);
@@ -63,6 +59,11 @@ export class RasterPreview {
 					if (!object.isMesh || !object.material) return;
 					const customize = material => {
 						const copy = material.clone();
+						// ShaderMaterial.clone() also clones texture uniforms without
+						// marking them for upload. Keep Blockbench's managed textures.
+						for (const [key, uniform] of Object.entries(material.uniforms || {})) {
+							if (uniform.value?.isTexture && copy.uniforms?.[key]) copy.uniforms[key].value = uniform.value;
+						}
 						if (override.roughness != null && 'roughness' in copy) copy.roughness = override.roughness;
 						if (override.metalness != null && 'metalness' in copy) copy.metalness = override.metalness;
 						if (override.emissive != null && copy.emissive) {
