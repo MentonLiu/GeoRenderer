@@ -225,11 +225,9 @@ export function buildSidebar() {
 
 	PTR.nodes.matlist = el('div', { id: 'ptr_matlist' });
 	PTR.nodes.groupList = el('div', { id: 'ptr_grouplist' });
-	const materialCards = [
-		card('模型组大纲', 'account_tree', [
-			el('div', { class: 'ptr_note', text: '选择组或直接点击左侧模型部件。选中的组在下方单独编辑；子组可覆盖父组设置。' }),
-			PTR.nodes.groupList,
-		]),
+	PTR.nodes.groupInspector = el('div', { id: 'ptr_groupinspector' });
+	const materialSettings = el('div', { class: 'ptr_material_settings' }, [
+		card('选中组的渲染参数', 'tune', [PTR.nodes.groupInspector]),
 		card('材质默认值', 'palette', [
 			rowSlider('默认粗糙度', 'def_roughness', 0, 1, 0.01, 2),
 			rowSlider('默认金属度', 'def_metalness', 0, 1, 0.01, 2),
@@ -244,7 +242,14 @@ export function buildSidebar() {
 		card('逐纹理覆盖', 'texture_add', [
 			PTR.nodes.matlist,
 		]),
-	];
+	]);
+	PTR.nodes.materialSettings = materialSettings;
+	const outlineCard = card('模型组大纲', 'account_tree', [
+		el('div', { class: 'ptr_note', text: '文件夹表示模型组；点击左侧模型也会定位到对应组。' }),
+		PTR.nodes.groupList,
+	]);
+	outlineCard.classList.add('ptr_material_outline');
+	const materialCards = [materialSettings, outlineCard];
 
 	const postCards = [
 		card('色调映射', 'tune', [

@@ -15,7 +15,15 @@ export function isTraceStep(id) {
 }
 
 export function canMoveCamera(id) {
-	return id === 'materials' || id === 'scene' || id === 'camera';
+	return id === 'camera';
+}
+
+export function isInspectionStep(id) {
+	return id === 'materials' || id === 'scene';
+}
+
+export function canNavigatePreview(id) {
+	return isInspectionStep(id) || canMoveCamera(id);
 }
 
 export function canExport(step, finalStarted, spp, finalSamples) {

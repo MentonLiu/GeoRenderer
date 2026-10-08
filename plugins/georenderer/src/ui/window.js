@@ -10,24 +10,28 @@ import { exportSettingsToClipboard, importSettingsFromClipboard, resetToDefaults
 import { buildSidebar } from './sidebar.js';
 import { PTR, saveSettings } from './state.js';
 import { RasterPreview } from './raster-preview.js';
+import { OrbitCam } from './orbit-camera.js';
 import { applyTimeOfDay, formatClock } from '../scene/presets.js';
-import { STEPS, canExport, canMoveCamera, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from './workflow-state.js';
+import { STEPS, canExport, canMoveCamera, canNavigatePreview, isInspectionStep, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from './workflow-state.js';
 import { updateExportSummary } from './export-panel.js';
 
 function attachViewportEvents(canvas) {
 	let dragging = 0;
 	let lastX = 0, lastY = 0;
 	let startX = 0, startY = 0, moved = false;
+	const activeCamera = () => canMoveCamera(PTR.step) ? PTR.cam : PTR.inspectionCam;
 
 	const endDrag = () => {
 		dragging = 0;
 		canvas.classList.remove('dragging');
-		clearTimeout(PTR.interactTimer);
-		PTR.interactTimer = setTimeout(() => setInteracting(false), 200);
+		if (canMoveCamera(PTR.step)) {
+			clearTimeout(PTR.interactTimer);
+			PTR.interactTimer = setTimeout(() => setInteracting(false), 200);
+		}
 	};
 
 	canvas.addEventListener('pointerdown', e => {
-		if (!canMoveCamera(PTR.step) || e.button > 2) return;
+		if (!canNavigatePreview(PTR.step) || e.button > 2) return;
 		dragging = (e.button === 0 && !e.shiftKey && !e.ctrlKey) ? 1 : 2;
 		lastX = startX = e.clientX; lastY = startY = e.clientY; moved = false;
 		canvas.setPointerCapture(e.pointerId);
@@ -38,18 +42,22 @@ function attachViewportEvents(canvas) {
 		if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) moved = true;
 		if (!moved) return;
 		canvas.classList.add('dragging');
-		clearTimeout(PTR.interactTimer);
-		setInteracting(true);
+		if (canMoveCamera(PTR.step)) {
+			clearTimeout(PTR.interactTimer);
+			setInteracting(true);
+		}
 		const dx = e.clientX - lastX;
 		const dy = e.clientY - lastY;
 		lastX = e.clientX; lastY = e.clientY;
-		if (dragging === 1) PTR.cam.orbit(dx, dy);
-		else PTR.cam.pan(dx / Math.max(canvas.clientWidth, 1), dy / Math.max(canvas.clientHeight, 1), 1);
-		if (PTR.tracer) PTR.tracer.reset();
+		const camera = activeCamera();
+		if (dragging === 1) camera.orbit(dx, dy);
+		else camera.pan(dx / Math.max(canvas.clientWidth, 1), dy / Math.max(canvas.clientHeight, 1), 1);
+		if (canMoveCamera(PTR.step) && PTR.tracer) PTR.tracer.reset();
 	});
 	canvas.addEventListener('pointerup', e => {
-		if (dragging === 1 && !moved && canvas === PTR.nodes.rasterCanvas && PTR.step === 'materials' && PTR.raster) {
-			selectGroup(PTR.raster.pickGroup(e.clientX, e.clientY));
+		if (dragging && !moved && PTR.step === 'materials' && e.button === 0) {
+			const uuid = PTR.raster?.pickGroupAt(e.clientX, e.clientY);
+			if (uuid) selectGroup(uuid);
 		}
 		endDrag();
 		try { canvas.releasePointerCapture(e.pointerId); } catch (err) { }
@@ -58,15 +66,20 @@ function attachViewportEvents(canvas) {
 	canvas.addEventListener('contextmenu', e => e.preventDefault());
 	canvas.addEventListener('wheel', e => {
 		e.preventDefault();
-		if (!canMoveCamera(PTR.step)) return;
-		PTR.cam.zoom(e.deltaY);
-		PTR.settings.camera_distance = PTR.cam.distance;
-		syncControls();
-		saveSettings();
-		clearTimeout(PTR.interactTimer);
-		setInteracting(true);
-		PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
-		if (PTR.tracer) PTR.tracer.reset();
+		if (!canNavigatePreview(PTR.step)) return;
+		const camera = activeCamera();
+		camera.zoom(e.deltaY);
+		if (canMoveCamera(PTR.step)) {
+			PTR.settings.camera_distance = camera.distance;
+			syncControls();
+			saveSettings();
+		}
+		if (canMoveCamera(PTR.step)) {
+			clearTimeout(PTR.interactTimer);
+			setInteracting(true);
+			PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
+			if (PTR.tracer) PTR.tracer.reset();
+		}
 	}, { passive: false });
 }
 
@@ -161,6 +174,11 @@ function fitFrame() {
 	const width = viewport.clientWidth;
 	const height = viewport.clientHeight;
 	if (!width || !height) return;
+	if (isInspectionStep(PTR.step)) {
+		frame.style.width = `${width}px`;
+		frame.style.height = `${height}px`;
+		return;
+	}
 	const aspect = Math.max(0.1, PTR.settings.res_width / Math.max(1, PTR.settings.res_height));
 	const w = Math.min(width, height * aspect);
 	frame.style.width = Math.floor(w) + 'px';
@@ -177,6 +195,49 @@ function syncSettingsToView() {
 	updateExportSummary();
 }
 
+function showRenderDialog() {
+	if (PTR.dialog) return;
+	PTR.dialog = new Dialog('georenderer_dialog', {
+		title: 'GeoRenderer',
+		width: 1180,
+		resizable: true,
+		darken: false,
+		cancel_on_click_outside: false,
+		buttons: [],
+		lines: [PTR.nodes.wrapper],
+		onCancel() { closeWindow(); return false; },
+		onResize() {
+			clearTimeout(PTR.interactTimer);
+			setInteracting(true);
+			PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
+		},
+	});
+	PTR.dialog.show();
+	PTR.dialog.object?.classList.add('ptr_dialog_root');
+	if (PTR.dialog.object && !PTR.dialog.object.style.height) {
+		const h = Math.round(clamp(window.innerHeight * 0.72, 420, window.innerHeight - 60));
+		PTR.dialog.object.style.height = h + 'px';
+	}
+	if (!PTR.frameResizeObs && typeof ResizeObserver !== 'undefined') {
+		PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
+		PTR.frameResizeObs.observe(PTR.nodes.viewport);
+	}
+}
+
+function initializeCamera() {
+	if (PTR.cameraInitialized) return;
+	PTR.cam.fov = PTR.settings.fov;
+	PTR.cam.ortho = !!PTR.settings.ortho;
+	PTR.cam.distance = PTR.settings.camera_distance;
+	PTR.cameraInitialized = true;
+}
+
+function ensureRasterPreview() {
+	if (PTR.raster) return;
+	PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
+	PTR.raster.setGroundTexture(((typeof Texture !== 'undefined' && Texture.all) || []).find(texture => texture.uuid === PTR.settings.ground_texture_uuid));
+}
+
 function updateExportActions() {
 	const ready = canExport(PTR.step, PTR.finalStarted, PTR.tracer ? PTR.tracer.spp : 0, PTR.settings.final_samples);
 	for (const button of [PTR.nodes.btnCopy, PTR.nodes.btnSave, PTR.nodes.btnBlockbench]) button.disabled = !ready;
@@ -188,6 +249,7 @@ export function setStep(id) {
 	if (stepIndex(id) < 0 || !PTR.dialog) return;
 	const wasTrace = isTraceStep(PTR.step);
 	const trace = isTraceStep(id);
+	if (id === 'camera' || trace) initializeCamera();
 	if (trace && !wasTrace) {
 		PTR.lockedCamera = PTR.cam.state();
 		PTR.interacting = false;
@@ -234,7 +296,7 @@ export function setStep(id) {
 	} else {
 		if (wasTrace && PTR.tracer) pauseRenderer();
 		PTR.finalStarted = false;
-		if (PTR.raster) PTR.raster.start();
+		PTR.raster?.start();
 	}
 	fitFrame();
 	if (trace && PTR.tracer) applyResolution();
@@ -298,72 +360,46 @@ function startRenderer() {
 
 export function openWindow() {
 	if (typeof Dialog === 'undefined') return;
-	if (PTR.dialog) {
-		closeWindow();
-		try { PTR.dialog.hide(); } catch (e) { }
-		try { PTR.dialog.delete(); } catch (e) { }
-		PTR.dialog = null;
-	}
-	PTR.cam.syncFromPreview();
-	PTR.cam.fov = PTR.settings.fov;
-	PTR.cam.ortho = !!PTR.settings.ortho;
-	PTR.cam.distance = PTR.settings.camera_distance;
-	const content = buildWindow();
-	PTR.dialog = new Dialog('georenderer_dialog', {
-		title: 'GeoRenderer',
-		width: 1180,
-		resizable: true,
-		darken: false,
-		cancel_on_click_outside: false,
-		buttons: [],
-		lines: [content],
-		onCancel() { closeWindow(); },
-		onResize() {
-			clearTimeout(PTR.interactTimer);
-			setInteracting(true);
-			PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
-		},
-	});
-	PTR.dialog.show();
-	if (PTR.dialog.object && !PTR.dialog.object.style.height) {
-		const h = Math.round(clamp(window.innerHeight * 0.72, 420, window.innerHeight - 60));
-		PTR.dialog.object.style.height = h + 'px';
-	}
-
-	setTimeout(() => {
-		try {
-			if (PTR.dialog && PTR.dialog.object) PTR.dialog.object.classList.add('ptr_dialog_root');
-			PTR.step = 'materials';
-			PTR.finalStarted = false;
-			PTR.lockedCamera = null;
-			PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
-			if (typeof Group !== 'undefined' && Group.first_selected) selectGroup(Group.first_selected.uuid);
-			PTR.raster.setGroundTexture(((typeof Texture !== 'undefined' && Texture.all) || []).find(texture => texture.uuid === PTR.settings.ground_texture_uuid));
-			PTR.onSettingChanged = key => {
-				if (key === 'res_width' || key === 'res_height') fitFrame();
-				if (key === 'fov') PTR.cam.fov = PTR.settings.fov;
-				if (key === 'ortho') PTR.cam.ortho = !!PTR.settings.ortho;
-				if (key === 'camera_distance') PTR.cam.distance = PTR.settings.camera_distance;
-				if (key === 'time_of_day') {
-					applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
-					if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
-					syncControls();
-				}
-				if (key === 'ground_texture_uuid' && PTR.raster) PTR.raster.setGroundTexture((Texture.all || []).find(texture => texture.uuid === PTR.settings.ground_texture_uuid));
-				updateExportSummary();
-			};
-			PTR.onRenderStatus = updateExportActions;
-			PTR.onSettingsLoaded = syncSettingsToView;
-			PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
-			PTR.frameResizeObs.observe(PTR.nodes.viewport);
-			setStep('materials');
-		} catch (err) {
-			showError(err);
-			if (PTR.nodes.overlay) {
-				PTR.nodes.overlay.textContent = '初始化失败: ' + (err && err.message ? err.message : err);
+	if (PTR.dialog) closeWindow();
+	try {
+		PTR.step = 'materials';
+		PTR.finalStarted = false;
+		PTR.lockedCamera = null;
+		PTR.cameraInitialized = false;
+		PTR.cam = new OrbitCam();
+		PTR.inspectionCam = new OrbitCam();
+		buildWindow();
+		showRenderDialog();
+		ensureRasterPreview();
+		if (!PTR.inspectionCam.syncFromPreview()) {
+			const bounds = new THREE.Box3().setFromObject(PTR.raster.model);
+			if (!bounds.isEmpty()) {
+				const center = bounds.getCenter(new THREE.Vector3());
+				const size = bounds.getSize(new THREE.Vector3());
+				PTR.inspectionCam.frameBounds({ center: center.toArray(), radius: size.length() / 2 });
 			}
 		}
-	}, 60);
+		if (typeof Group !== 'undefined' && Group.first_selected) selectGroup(Group.first_selected.uuid);
+		PTR.onSettingChanged = key => {
+			if (key === 'res_width' || key === 'res_height') fitFrame();
+			if (key === 'fov') PTR.cam.fov = PTR.settings.fov;
+			if (key === 'ortho') PTR.cam.ortho = !!PTR.settings.ortho;
+			if (key === 'camera_distance') PTR.cam.distance = PTR.settings.camera_distance;
+			if (key === 'time_of_day') {
+				applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
+				if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
+				syncControls();
+			}
+			if (key === 'ground_texture_uuid' && PTR.raster) PTR.raster.setGroundTexture((Texture.all || []).find(texture => texture.uuid === PTR.settings.ground_texture_uuid));
+			updateExportSummary();
+		};
+		PTR.onRenderStatus = updateExportActions;
+		PTR.onSettingsLoaded = syncSettingsToView;
+		setStep('materials');
+	} catch (err) {
+		showError(err);
+		closeWindow();
+	}
 }
 
 export function closeWindow() {
@@ -373,6 +409,10 @@ export function closeWindow() {
 	closeRenderer();
 	if (PTR.raster) { PTR.raster.dispose(); PTR.raster = null; }
 	if (PTR.frameResizeObs) { PTR.frameResizeObs.disconnect(); PTR.frameResizeObs = null; }
+	if (PTR.dialog) {
+		try { PTR.dialog.hide(); PTR.dialog.delete(); } catch (err) { }
+		PTR.dialog = null;
+	}
 	PTR.onSettingChanged = null;
 	PTR.onRenderStatus = null;
 	PTR.onSettingsLoaded = null;
@@ -380,6 +420,7 @@ export function closeWindow() {
 	PTR.refreshMaterialList = null;
 	PTR.refreshGroundTextures = null;
 	PTR.lockedCamera = null;
+	PTR.cameraInitialized = false;
 	PTR.selectedGroupUuid = null;
 	PTR.controls = [];
 	PTR.nodes = {};

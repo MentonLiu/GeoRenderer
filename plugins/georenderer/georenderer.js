@@ -285,8 +285,10 @@
   };
   var PTR = {
     dialog: null,
+    cameraInitialized: false,
     tracer: null,
     cam: new OrbitCam(),
+    inspectionCam: new OrbitCam(),
     settings: Object.assign({}, DEFAULTS),
     overrides: {},
     groupOverrides: {},
@@ -360,7 +362,13 @@
     return id === "preview" || id === "export";
   }
   function canMoveCamera(id) {
-    return id === "materials" || id === "scene" || id === "camera";
+    return id === "camera";
+  }
+  function isInspectionStep(id) {
+    return id === "materials" || id === "scene";
+  }
+  function canNavigatePreview(id) {
+    return isInspectionStep(id) || canMoveCamera(id);
   }
   function canExport(step, finalStarted, spp, finalSamples) {
     return step === "export" && !!finalStarted && spp >= Math.max(1, finalSamples);
@@ -2723,6 +2731,19 @@
   function isGroup(node) {
     return typeof Group !== "undefined" && node instanceof Group;
   }
+  var nameOrder = new Intl.Collator("zh-CN", { numeric: true, sensitivity: "base" });
+  function orderedGroups(nodes) {
+    return (nodes || []).filter(isGroup).sort(
+      (a, b) => nameOrder.compare(a.name || "", b.name || "") || String(a.uuid).localeCompare(String(b.uuid))
+    );
+  }
+  function groupUuidForElement(element, allGroups = groups()) {
+    const chain = groupChainForElement(element);
+    return chain.find((uuid) => allGroups.some((group) => group.uuid === uuid)) || null;
+  }
+  function selectGroupForElement(element) {
+    selectGroup(groupUuidForElement(element));
+  }
   function selectGroup(uuid) {
     const group = groups().find((item) => item.uuid === uuid);
     PTR.selectedGroupUuid = group ? group.uuid : null;
@@ -2733,6 +2754,9 @@
     }
     if (PTR.raster) PTR.raster.highlightGroup(PTR.selectedGroupUuid);
     buildGroupList();
+    if (group && PTR.nodes.materialSettings) PTR.nodes.materialSettings.scrollTop = 0;
+    const selectedRow = PTR.nodes.groupList?.querySelector(`[data-group-uuid="${PTR.selectedGroupUuid}"]`);
+    selectedRow?.scrollIntoView?.({ block: "nearest" });
   }
   function changed(group, reset) {
     reset.disabled = false;
@@ -2768,7 +2792,7 @@
   function buildInspector(group) {
     const panel = el("div", { class: "ptr_group_inspector" });
     if (!group) {
-      panel.appendChild(el("div", { class: "ptr_note", text: "在左侧模型上点击部件，或在上方大纲中选择组，即可编辑该组材质。" }));
+      panel.appendChild(el("div", { class: "ptr_note", text: "点击左侧模型部件，或在下方大纲中选择组，即可编辑该组材质。" }));
       return panel;
     }
     const head = el("div", { class: "ptr_group_inspector_head" }, [
@@ -2797,58 +2821,68 @@
     panel.appendChild(makeRow("发光颜色", [color]));
     return panel;
   }
-  function appendOutline(host, nodes, depth, parentGroup) {
-    for (const node of nodes || []) {
-      if (isGroup(node)) {
-        const open = !PTR.collapsedGroups.has(node.uuid);
-        const row = el("div", { class: "ptr_outline_row", "data-group-uuid": node.uuid, style: { paddingLeft: `${depth * 14}px` } });
-        const disclosure = el("button", { type: "button", class: "ptr_outline_disclosure", "aria-label": `${open ? "折叠" : "展开"} ${node.name || "未命名组"}`, "aria-expanded": String(open), text: open ? "▾" : "▸" });
+  function appendOutline(host, nodes, depth) {
+    for (const node of orderedGroups(nodes)) {
+      const open = !PTR.collapsedGroups.has(node.uuid);
+      const childGroups = orderedGroups(node.children);
+      const branch = el("div", { class: "ptr_outline_branch" });
+      const selected = PTR.selectedGroupUuid === node.uuid;
+      const row = el("div", {
+        class: `ptr_outline_row${selected ? " selected" : ""}`,
+        role: "treeitem",
+        "data-group-uuid": node.uuid,
+        "aria-level": String(depth + 1),
+        "aria-selected": String(selected)
+      });
+      if (childGroups.length) {
+        const disclosure = el("button", { type: "button", class: "ptr_outline_disclosure", "aria-label": `${open ? "折叠" : "展开"} ${node.name || "未命名组"}`, "aria-expanded": String(open) }, [
+          el("i", { class: "material-icons", text: open ? "expand_more" : "chevron_right" })
+        ]);
         disclosure.addEventListener("click", () => {
           if (open) PTR.collapsedGroups.add(node.uuid);
           else PTR.collapsedGroups.delete(node.uuid);
           buildGroupList();
         });
-        const selected = PTR.selectedGroupUuid === node.uuid;
-        const button = el("button", { type: "button", class: `ptr_outline_item${selected ? " selected" : ""}`, "aria-selected": String(selected) }, [
-          el("i", { class: "material-icons", text: "folder" }),
-          el("span", { text: node.name || "未命名组" })
-        ]);
-        button.addEventListener("click", () => selectGroup(node.uuid));
-        row.append(disclosure, button);
-        if (PTR.groupOverrides[node.uuid]) row.classList.add("modified");
-        host.appendChild(row);
-        if (open) appendOutline(host, node.children, depth + 1, node);
-      } else if (parentGroup) {
-        const row = el("div", { class: "ptr_outline_row", style: { paddingLeft: `${depth * 14 + 20}px` } });
-        const button = el("button", { type: "button", class: "ptr_outline_item ptr_outline_element" }, [
-          el("i", { class: "material-icons", text: "view_in_ar" }),
-          el("span", { text: node.name || "未命名部件" })
-        ]);
-        button.addEventListener("click", () => selectGroup(parentGroup.uuid));
-        row.appendChild(button);
-        host.appendChild(row);
+        row.appendChild(disclosure);
+      } else {
+        row.appendChild(el("span", { class: "ptr_outline_spacer" }));
       }
+      const button = el("button", { type: "button", class: `ptr_outline_item${selected ? " selected" : ""}` }, [
+        el("i", { class: "material-icons", text: open && childGroups.length ? "folder_open" : "folder" }),
+        el("span", { text: node.name || "未命名组" })
+      ]);
+      button.addEventListener("click", () => selectGroup(node.uuid));
+      row.appendChild(button);
+      if (PTR.groupOverrides[node.uuid]) row.classList.add("modified");
+      branch.appendChild(row);
+      if (open && childGroups.length) {
+        const children = el("div", { class: "ptr_outline_children", role: "group" });
+        appendOutline(children, childGroups, depth + 1);
+        branch.appendChild(children);
+      }
+      host.appendChild(branch);
     }
   }
   function buildGroupList() {
     const host = PTR.nodes.groupList;
-    if (!host) return;
+    const inspector = PTR.nodes.groupInspector;
+    if (!host || !inspector) return;
     const all = groups();
     if (!all.some((group) => group.uuid === PTR.selectedGroupUuid)) PTR.selectedGroupUuid = null;
     const oldTree = host.querySelector(".ptr_outline");
     const scroll = oldTree ? oldTree.scrollTop : 0;
     host.replaceChildren();
+    inspector.replaceChildren(buildInspector(all.find((group) => group.uuid === PTR.selectedGroupUuid)));
     if (!all.length) {
       host.appendChild(el("div", { class: "ptr_note", text: "当前模型没有组；请先在 Blockbench 大纲中建立组。" }));
       return;
     }
     const tree = el("div", { class: "ptr_outline", role: "tree", "aria-label": "模型组大纲" });
     const root = typeof Outliner !== "undefined" ? Outliner.root : [];
-    appendOutline(tree, root, 0, null);
-    if (!tree.childElementCount) appendOutline(tree, all.filter((group) => !isGroup(group.parent)), 0, null);
+    appendOutline(tree, root, 0);
+    if (!tree.childElementCount) appendOutline(tree, all.filter((group) => !isGroup(group.parent)), 0);
     host.appendChild(tree);
     tree.scrollTop = scroll;
-    host.appendChild(buildInspector(all.find((group) => group.uuid === PTR.selectedGroupUuid)));
   }
 
   // plugins/georenderer/src/ui/settings-actions.js
@@ -3268,11 +3302,9 @@
     ];
     PTR.nodes.matlist = el("div", { id: "ptr_matlist" });
     PTR.nodes.groupList = el("div", { id: "ptr_grouplist" });
-    const materialCards = [
-      card("模型组大纲", "account_tree", [
-        el("div", { class: "ptr_note", text: "选择组或直接点击左侧模型部件。选中的组在下方单独编辑；子组可覆盖父组设置。" }),
-        PTR.nodes.groupList
-      ]),
+    PTR.nodes.groupInspector = el("div", { id: "ptr_groupinspector" });
+    const materialSettings = el("div", { class: "ptr_material_settings" }, [
+      card("选中组的渲染参数", "tune", [PTR.nodes.groupInspector]),
       card("材质默认值", "palette", [
         rowSlider("默认粗糙度", "def_roughness", 0, 1, 0.01, 2),
         rowSlider("默认金属度", "def_metalness", 0, 1, 0.01, 2),
@@ -3287,7 +3319,14 @@
       card("逐纹理覆盖", "texture_add", [
         PTR.nodes.matlist
       ])
-    ];
+    ]);
+    PTR.nodes.materialSettings = materialSettings;
+    const outlineCard = card("模型组大纲", "account_tree", [
+      el("div", { class: "ptr_note", text: "文件夹表示模型组；点击左侧模型也会定位到对应组。" }),
+      PTR.nodes.groupList
+    ]);
+    outlineCard.classList.add("ptr_material_outline");
+    const materialCards = [materialSettings, outlineCard];
     const postCards = [
       card("色调映射", "tune", [
         rowSelect("色调映射", "tone_mapping", { none: "无", reinhard: "Reinhard", aces: "ACES", filmic: "Filmic", agx: "AgX" }),
@@ -3342,6 +3381,9 @@
       this.scene = new THREE.Scene();
       this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1e5);
       this.orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1e5);
+      this.raycaster = new THREE.Raycaster();
+      this.pointer = new THREE.Vector2();
+      this.activeCamera = this.camera;
       this.ambient = new THREE.AmbientLight(16777215, 1.2);
       this.sun = new THREE.DirectionalLight(16777215, 1.5);
       this.scene.add(this.ambient, this.sun);
@@ -3355,7 +3397,6 @@
       this.groundDisk.rotation.x = -Math.PI / 2;
       this.scene.add(this.groundDisk);
       this.model = new THREE.Group();
-      this.raycaster = new THREE.Raycaster();
       this.selectionHelper = null;
       this.ownedMaterials = [];
       this.scene.add(this.model);
@@ -3373,6 +3414,7 @@
         const mesh = element && element.mesh;
         if (!mesh || element.visibility === false || mesh.visible === false) continue;
         const clone = mesh.clone(true);
+        clone.userData.georendererSourceMesh = mesh;
         const groupChain = groupChainForElement(element);
         clone.traverse((object) => {
           object.userData.georendererGroupChain = groupChain;
@@ -3402,16 +3444,29 @@
       this.model.updateMatrixWorld(true);
       this.highlightGroup(PTR.selectedGroupUuid);
     }
-    pickGroup(clientX, clientY) {
-      if (!this.activeCamera) return null;
+    syncModelPose() {
+      if (typeof Canvas !== "undefined" && Canvas.scene) Canvas.scene.updateMatrixWorld(true);
+      for (const clone of this.model.children) {
+        const source = clone.userData.georendererSourceMesh;
+        if (!source) continue;
+        clone.visible = source.visible;
+        clone.matrix.copy(source.matrixWorld);
+      }
+      this.model.updateMatrixWorld(true);
+    }
+    pickGroupAt(clientX, clientY) {
       const rect = this.canvas.getBoundingClientRect();
       if (!rect.width || !rect.height) return null;
-      const x = (clientX - rect.left) / rect.width * 2 - 1;
-      const y = 1 - (clientY - rect.top) / rect.height * 2;
-      this.activeCamera.updateMatrixWorld(true);
-      this.raycaster.setFromCamera(new THREE.Vector2(x, y), this.activeCamera);
-      const hit = this.raycaster.intersectObjects(this.model.children, true).find((item) => item.object.visible);
-      return hit?.object.userData.georendererGroupChain?.[0] || null;
+      this.pointer.set(
+        (clientX - rect.left) / rect.width * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1
+      );
+      this.raycaster.setFromCamera(this.pointer, this.activeCamera);
+      for (const hit of this.raycaster.intersectObjects(this.model.children, true)) {
+        const chain = hit.object.userData.georendererGroupChain;
+        if (chain?.length) return chain[0];
+      }
+      return null;
     }
     highlightGroup(uuid) {
       if (this.selectionHelper) {
@@ -3442,6 +3497,7 @@
       this.floor.material.needsUpdate = true;
     }
     draw() {
+      this.syncModelPose();
       const width = Math.max(1, this.canvas.clientWidth);
       const height = Math.max(1, this.canvas.clientHeight);
       if (this.width !== width || this.height !== height) {
@@ -3459,7 +3515,8 @@
           saveSettings();
         }
       }
-      const cam = PTR.cam.state();
+      const inspection = PTR.step === "materials" || PTR.step === "scene";
+      const cam = (inspection ? PTR.inspectionCam : PTR.cam).state();
       const target = cam.ortho ? this.orthoCamera : this.camera;
       if (cam.ortho) {
         const halfH = cam.orthoHalfHeight;
@@ -3474,11 +3531,11 @@
       target.updateProjectionMatrix();
       target.position.set(...cam.pos);
       target.lookAt(...cam.target);
+      target.updateMatrixWorld(true);
       this.activeCamera = target;
-      const materialStep = PTR.step === "materials";
-      this.grid.visible = materialStep;
-      this.floor.visible = !materialStep && !!settings2.ground_on && !(settings2.ground_radius > 0);
-      this.groundDisk.visible = !materialStep && !!settings2.ground_on && settings2.ground_radius > 0;
+      this.grid.visible = PTR.step === "materials";
+      this.floor.visible = !this.grid.visible && !!settings2.ground_on && !(settings2.ground_radius > 0);
+      this.groundDisk.visible = !this.grid.visible && !!settings2.ground_on && settings2.ground_radius > 0;
       this.floor.position.y = settings2.ground_y;
       this.groundDisk.position.y = settings2.ground_y;
       if (this.groundDisk.visible) this.groundDisk.scale.setScalar(settings2.ground_radius);
@@ -3492,13 +3549,13 @@
         this.groundMap.repeat.set(repeat, repeat);
       }
       const daylight = Math.max(0.1, Math.min(1, (Math.sin((settings2.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
-      this.ambient.intensity = materialStep ? 1.2 : 0.2 + daylight * Math.max(0, settings2.env_intensity);
-      this.sun.visible = !materialStep && !!settings2.sun_enable;
+      this.ambient.intensity = 0.2 + daylight * Math.max(0, settings2.env_intensity);
+      this.sun.visible = !!settings2.sun_enable;
       const dir = sunDirection(settings2);
       this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
       this.sun.intensity = Math.max(0, settings2.sun_intensity / 4);
       this.sun.color.set(settings2.sun_color);
-      this.scene.background = !materialStep && settings2.bg_mode === "transparent" ? null : !materialStep && PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(materialStep ? "#252b34" : settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(materialStep || settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
+      this.scene.background = this.grid.visible ? new THREE.Color("#20242b") : settings2.bg_mode === "transparent" ? null : PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
       this.renderer.render(this.scene, target);
     }
     start() {
@@ -3535,14 +3592,17 @@
     let dragging = 0;
     let lastX = 0, lastY = 0;
     let startX = 0, startY = 0, moved = false;
+    const activeCamera = () => canMoveCamera(PTR.step) ? PTR.cam : PTR.inspectionCam;
     const endDrag = () => {
       dragging = 0;
       canvas.classList.remove("dragging");
-      clearTimeout(PTR.interactTimer);
-      PTR.interactTimer = setTimeout(() => setInteracting(false), 200);
+      if (canMoveCamera(PTR.step)) {
+        clearTimeout(PTR.interactTimer);
+        PTR.interactTimer = setTimeout(() => setInteracting(false), 200);
+      }
     };
     canvas.addEventListener("pointerdown", (e) => {
-      if (!canMoveCamera(PTR.step) || e.button > 2) return;
+      if (!canNavigatePreview(PTR.step) || e.button > 2) return;
       dragging = e.button === 0 && !e.shiftKey && !e.ctrlKey ? 1 : 2;
       lastX = startX = e.clientX;
       lastY = startY = e.clientY;
@@ -3555,19 +3615,23 @@
       if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) moved = true;
       if (!moved) return;
       canvas.classList.add("dragging");
-      clearTimeout(PTR.interactTimer);
-      setInteracting(true);
+      if (canMoveCamera(PTR.step)) {
+        clearTimeout(PTR.interactTimer);
+        setInteracting(true);
+      }
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
-      if (dragging === 1) PTR.cam.orbit(dx, dy);
-      else PTR.cam.pan(dx / Math.max(canvas.clientWidth, 1), dy / Math.max(canvas.clientHeight, 1), 1);
-      if (PTR.tracer) PTR.tracer.reset();
+      const camera = activeCamera();
+      if (dragging === 1) camera.orbit(dx, dy);
+      else camera.pan(dx / Math.max(canvas.clientWidth, 1), dy / Math.max(canvas.clientHeight, 1), 1);
+      if (canMoveCamera(PTR.step) && PTR.tracer) PTR.tracer.reset();
     });
     canvas.addEventListener("pointerup", (e) => {
-      if (dragging === 1 && !moved && canvas === PTR.nodes.rasterCanvas && PTR.step === "materials" && PTR.raster) {
-        selectGroup(PTR.raster.pickGroup(e.clientX, e.clientY));
+      if (dragging && !moved && PTR.step === "materials" && e.button === 0) {
+        const uuid = PTR.raster?.pickGroupAt(e.clientX, e.clientY);
+        if (uuid) selectGroup(uuid);
       }
       endDrag();
       try {
@@ -3579,15 +3643,20 @@
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      if (!canMoveCamera(PTR.step)) return;
-      PTR.cam.zoom(e.deltaY);
-      PTR.settings.camera_distance = PTR.cam.distance;
-      syncControls();
-      saveSettings();
-      clearTimeout(PTR.interactTimer);
-      setInteracting(true);
-      PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
-      if (PTR.tracer) PTR.tracer.reset();
+      if (!canNavigatePreview(PTR.step)) return;
+      const camera = activeCamera();
+      camera.zoom(e.deltaY);
+      if (canMoveCamera(PTR.step)) {
+        PTR.settings.camera_distance = camera.distance;
+        syncControls();
+        saveSettings();
+      }
+      if (canMoveCamera(PTR.step)) {
+        clearTimeout(PTR.interactTimer);
+        setInteracting(true);
+        PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
+        if (PTR.tracer) PTR.tracer.reset();
+      }
     }, { passive: false });
   }
   function buildWindow() {
@@ -3698,6 +3767,11 @@
     const width = viewport.clientWidth;
     const height = viewport.clientHeight;
     if (!width || !height) return;
+    if (isInspectionStep(PTR.step)) {
+      frame.style.width = `${width}px`;
+      frame.style.height = `${height}px`;
+      return;
+    }
     const aspect = Math.max(0.1, PTR.settings.res_width / Math.max(1, PTR.settings.res_height));
     const w = Math.min(width, height * aspect);
     frame.style.width = Math.floor(w) + "px";
@@ -3712,6 +3786,49 @@
     fitFrame();
     updateExportSummary();
   }
+  function showRenderDialog() {
+    if (PTR.dialog) return;
+    PTR.dialog = new Dialog("georenderer_dialog", {
+      title: "GeoRenderer",
+      width: 1180,
+      resizable: true,
+      darken: false,
+      cancel_on_click_outside: false,
+      buttons: [],
+      lines: [PTR.nodes.wrapper],
+      onCancel() {
+        closeWindow();
+        return false;
+      },
+      onResize() {
+        clearTimeout(PTR.interactTimer);
+        setInteracting(true);
+        PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
+      }
+    });
+    PTR.dialog.show();
+    PTR.dialog.object?.classList.add("ptr_dialog_root");
+    if (PTR.dialog.object && !PTR.dialog.object.style.height) {
+      const h = Math.round(clamp(window.innerHeight * 0.72, 420, window.innerHeight - 60));
+      PTR.dialog.object.style.height = h + "px";
+    }
+    if (!PTR.frameResizeObs && typeof ResizeObserver !== "undefined") {
+      PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
+      PTR.frameResizeObs.observe(PTR.nodes.viewport);
+    }
+  }
+  function initializeCamera() {
+    if (PTR.cameraInitialized) return;
+    PTR.cam.fov = PTR.settings.fov;
+    PTR.cam.ortho = !!PTR.settings.ortho;
+    PTR.cam.distance = PTR.settings.camera_distance;
+    PTR.cameraInitialized = true;
+  }
+  function ensureRasterPreview() {
+    if (PTR.raster) return;
+    PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
+    PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
+  }
   function updateExportActions() {
     const ready = canExport(PTR.step, PTR.finalStarted, PTR.tracer ? PTR.tracer.spp : 0, PTR.settings.final_samples);
     for (const button of [PTR.nodes.btnCopy, PTR.nodes.btnSave, PTR.nodes.btnBlockbench]) button.disabled = !ready;
@@ -3722,6 +3839,7 @@
     if (stepIndex(id) < 0 || !PTR.dialog) return;
     const wasTrace = isTraceStep(PTR.step);
     const trace = isTraceStep(id);
+    if (id === "camera" || trace) initializeCamera();
     if (trace && !wasTrace) {
       PTR.lockedCamera = PTR.cam.state();
       PTR.interacting = false;
@@ -3772,7 +3890,7 @@
     } else {
       if (wasTrace && PTR.tracer) pauseRenderer();
       PTR.finalStarted = false;
-      if (PTR.raster) PTR.raster.start();
+      PTR.raster?.start();
     }
     fitFrame();
     if (trace && PTR.tracer) applyResolution();
@@ -3836,79 +3954,46 @@
   }
   function openWindow() {
     if (typeof Dialog === "undefined") return;
-    if (PTR.dialog) {
-      closeWindow();
-      try {
-        PTR.dialog.hide();
-      } catch (e) {
-      }
-      try {
-        PTR.dialog.delete();
-      } catch (e) {
-      }
-      PTR.dialog = null;
-    }
-    PTR.cam.syncFromPreview();
-    PTR.cam.fov = PTR.settings.fov;
-    PTR.cam.ortho = !!PTR.settings.ortho;
-    PTR.cam.distance = PTR.settings.camera_distance;
-    const content = buildWindow();
-    PTR.dialog = new Dialog("georenderer_dialog", {
-      title: "GeoRenderer",
-      width: 1180,
-      resizable: true,
-      darken: false,
-      cancel_on_click_outside: false,
-      buttons: [],
-      lines: [content],
-      onCancel() {
-        closeWindow();
-      },
-      onResize() {
-        clearTimeout(PTR.interactTimer);
-        setInteracting(true);
-        PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
-      }
-    });
-    PTR.dialog.show();
-    if (PTR.dialog.object && !PTR.dialog.object.style.height) {
-      const h = Math.round(clamp(window.innerHeight * 0.72, 420, window.innerHeight - 60));
-      PTR.dialog.object.style.height = h + "px";
-    }
-    setTimeout(() => {
-      try {
-        if (PTR.dialog && PTR.dialog.object) PTR.dialog.object.classList.add("ptr_dialog_root");
-        PTR.step = "materials";
-        PTR.finalStarted = false;
-        PTR.lockedCamera = null;
-        PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
-        if (typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
-        PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
-        PTR.onSettingChanged = (key) => {
-          if (key === "res_width" || key === "res_height") fitFrame();
-          if (key === "fov") PTR.cam.fov = PTR.settings.fov;
-          if (key === "ortho") PTR.cam.ortho = !!PTR.settings.ortho;
-          if (key === "camera_distance") PTR.cam.distance = PTR.settings.camera_distance;
-          if (key === "time_of_day") {
-            applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
-            if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
-            syncControls();
-          }
-          if (key === "ground_texture_uuid" && PTR.raster) PTR.raster.setGroundTexture((Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
-          updateExportSummary();
-        };
-        PTR.onRenderStatus = updateExportActions;
-        PTR.onSettingsLoaded = syncSettingsToView;
-        PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
-        PTR.frameResizeObs.observe(PTR.nodes.viewport);
-        setStep("materials");
-      } catch (err) {
-        showError(err);
-        if (PTR.nodes.overlay) {
-          PTR.nodes.overlay.textContent = "初始化失败: " + (err && err.message ? err.message : err);
+    if (PTR.dialog) closeWindow();
+    try {
+      PTR.step = "materials";
+      PTR.finalStarted = false;
+      PTR.lockedCamera = null;
+      PTR.cameraInitialized = false;
+      PTR.cam = new OrbitCam();
+      PTR.inspectionCam = new OrbitCam();
+      buildWindow();
+      showRenderDialog();
+      ensureRasterPreview();
+      if (!PTR.inspectionCam.syncFromPreview()) {
+        const bounds = new THREE.Box3().setFromObject(PTR.raster.model);
+        if (!bounds.isEmpty()) {
+          const center = bounds.getCenter(new THREE.Vector3());
+          const size = bounds.getSize(new THREE.Vector3());
+          PTR.inspectionCam.frameBounds({ center: center.toArray(), radius: size.length() / 2 });
         }
       }
-    }, 60);
+      if (typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
+      PTR.onSettingChanged = (key) => {
+        if (key === "res_width" || key === "res_height") fitFrame();
+        if (key === "fov") PTR.cam.fov = PTR.settings.fov;
+        if (key === "ortho") PTR.cam.ortho = !!PTR.settings.ortho;
+        if (key === "camera_distance") PTR.cam.distance = PTR.settings.camera_distance;
+        if (key === "time_of_day") {
+          applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
+          if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
+          syncControls();
+        }
+        if (key === "ground_texture_uuid" && PTR.raster) PTR.raster.setGroundTexture((Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
+        updateExportSummary();
+      };
+      PTR.onRenderStatus = updateExportActions;
+      PTR.onSettingsLoaded = syncSettingsToView;
+      setStep("materials");
+    } catch (err) {
+      showError(err);
+      closeWindow();
+    }
   }
   function closeWindow() {
     clearTimeout(PTR.interactTimer);
@@ -3923,6 +4008,14 @@
       PTR.frameResizeObs.disconnect();
       PTR.frameResizeObs = null;
     }
+    if (PTR.dialog) {
+      try {
+        PTR.dialog.hide();
+        PTR.dialog.delete();
+      } catch (err) {
+      }
+      PTR.dialog = null;
+    }
     PTR.onSettingChanged = null;
     PTR.onRenderStatus = null;
     PTR.onSettingsLoaded = null;
@@ -3930,6 +4023,7 @@
     PTR.refreshMaterialList = null;
     PTR.refreshGroundTextures = null;
     PTR.lockedCamera = null;
+    PTR.cameraInitialized = false;
     PTR.selectedGroupUuid = null;
     PTR.controls = [];
     PTR.nodes = {};
@@ -3962,8 +4056,8 @@
 	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
 }
 #ptr_raster_canvas { position: absolute; inset: 0; }
+#ptr_frame[data-step="materials"] #ptr_raster_canvas:not(.dragging) { cursor: pointer; }
 #ptr_canvas { position: absolute; inset: 0; }
-#ptr_frame[data-step="materials"] #ptr_raster_canvas { cursor: pointer; }
 #ptr_frame[data-step="preview"] #ptr_canvas,
 #ptr_frame[data-step="export"] #ptr_canvas { cursor: default; }
 #ptr_viewport canvas.dragging { cursor: grabbing; }
@@ -3981,8 +4075,13 @@
 	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;
 	background: var(--color-ui); border-left: 1px solid var(--color-border);
 }
-.ptr_stagepanes { flex: 1 1 auto; overflow-y: auto; padding: 10px; min-width: 0; }
+.ptr_stagepanes { flex: 1 1 auto; overflow: hidden; padding: 10px; min-width: 0; }
+.ptr_stagepane { height: 100%; overflow-y: auto; }
+.ptr_stagepane[data-step="materials"] { display: flex; flex-direction: column; overflow: hidden; }
 .ptr_stagepane[hidden] { display: none; }
+.ptr_material_settings { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 2px; }
+.ptr_material_outline { flex: 0 0 32%; min-height: 150px; max-height: 260px; margin-bottom: 0; display: flex; flex-direction: column; }
+#ptr_grouplist { flex: 1 1 auto; min-height: 0; display: flex; }
 .ptr_summary { display: grid; gap: 6px; margin: 4px 0 10px; }
 .ptr_summary_line { padding: 6px 8px; border-radius: 4px; background: var(--color-ui); font-size: 11px; line-height: 1.4; color: var(--color-text); }
 .ptr_time { display: block; padding: 2px 0 2px 104px; color: var(--color-light); font-variant-numeric: tabular-nums; }
@@ -4066,16 +4165,19 @@
 .ptr_dialog_root .dialog_wrapper { min-height: 0; }
 .ptr_dialog_root .dialog_handle { cursor: move; }
 #ptr_matlist { margin-top: 4px; }
-.ptr_outline { max-height: 280px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 3px; background: var(--color-ui); }
-.ptr_outline_row { display: flex; align-items: stretch; min-height: 25px; }
-.ptr_outline_disclosure { flex: 0 0 19px; width: 19px; border: 0; background: transparent; color: var(--color-text); cursor: pointer; padding: 0; }
-.ptr_outline_item { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; padding: 2px 5px; font-size: 12px; }
-.ptr_outline_item > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.ptr_outline_item .material-icons { font-size: 15px; width: 17px; flex: 0 0 17px; color: var(--color-subtle_text); }
-.ptr_outline_item:hover, .ptr_outline_item.selected { background: var(--color-selected); }
-.ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
-.ptr_outline_element { opacity: 0.7; }
-.ptr_group_inspector { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--color-border); }
+#ptr_grouplist .ptr_outline { flex: 1 1 auto; min-height: 0; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 0; background: var(--color-ui); }
+#ptr_grouplist .ptr_outline_children { margin-left: 8px; padding-left: 0; border-left: 1px solid var(--color-border); }
+#ptr_grouplist .ptr_outline_row { display: flex; align-items: center; justify-content: flex-start; height: 19px; min-height: 19px; margin: 0; padding: 0; }
+#ptr_grouplist .ptr_outline_disclosure { display: flex; flex: 0 0 15px !important; align-items: center; justify-content: flex-start !important; width: 15px !important; min-width: 0 !important; height: 19px; min-height: 0; margin: 0 !important; padding: 0 !important; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--color-text); cursor: pointer; }
+#ptr_grouplist .ptr_outline_disclosure .material-icons { font-size: 15px; line-height: 19px; }
+#ptr_grouplist .ptr_outline_spacer { flex: 0 0 15px; width: 15px; }
+#ptr_grouplist .ptr_outline_item { display: flex; flex: 1 1 auto !important; align-items: center; justify-content: flex-start !important; gap: 2px; width: auto; min-width: 0 !important; height: 19px; min-height: 0; margin: 0 !important; padding: 0 !important; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--color-text); text-align: left !important; cursor: pointer; font-size: 12px; line-height: 19px; }
+#ptr_grouplist .ptr_outline_item > span { flex: 0 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
+#ptr_grouplist .ptr_outline_item .material-icons { font-size: 13px; width: 14px; flex: 0 0 14px; color: var(--color-subtle_text); }
+#ptr_grouplist .ptr_outline_row:hover, #ptr_grouplist .ptr_outline_row.selected { background: var(--color-selected); }
+#ptr_grouplist .ptr_outline_item:hover, #ptr_grouplist .ptr_outline_item.selected { background: transparent; }
+#ptr_grouplist .ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
+.ptr_group_inspector { margin: 0; padding: 0; }
 .ptr_group_inspector_head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 6px; font-size: 12px; }
 .ptr_mat {
 	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;
@@ -4098,7 +4200,7 @@
     about: [
       "在 **视图 → GeoRenderer** 中打开",
       "",
-      "- 左键拖拽旋转，右键/Shift+左键平移，滚轮缩放",
+      "- 五步都在独立窗口中完成；前两步可检查模型，第 3 步确定最终镜头",
       "- 可载入 `.hdr` 或普通图片作为环境贴图",
       "- “阴影捕捉 + 背景透明” 可导出带投影的透明 PNG",
       "",
@@ -4119,7 +4221,7 @@
       }
       action = new Action("georenderer_open", {
         name: "GeoRenderer",
-        description: "在独立窗口中用路径追踪渲染当前模型",
+        description: "在独立窗口配置场景并渲染当前模型",
         icon: "auto_awesome",
         category: "view",
         condition: () => typeof Project !== "undefined" && !!Project,
@@ -4157,7 +4259,9 @@
         Blockbench.on("undo", eventHandler);
         Blockbench.on("redo", eventHandler);
         selectionHandler = () => {
-          if (PTR.nodes.groupList && typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
+          if (!PTR.nodes.groupList) return;
+          if (typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
+          else if (typeof Outliner !== "undefined" && Outliner.selected?.[0]) selectGroupForElement(Outliner.selected[0]);
         };
         Blockbench.on("update_selection", selectionHandler);
       } catch (err) {

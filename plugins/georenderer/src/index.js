@@ -2,7 +2,7 @@ import { PLUGIN_ID } from './core/config.js';
 import { rebuildScene, updateStatus } from './ui/render-loop.js';
 import { PTR, loadSettings } from './ui/state.js';
 import { closeWindow, openWindow } from './ui/window.js';
-import { buildGroupList, selectGroup } from './ui/group-panel.js';
+import { buildGroupList, selectGroup, selectGroupForElement } from './ui/group-panel.js';
 import { buildMaterialList } from './ui/material-panel.js';
 import CSS from './assets/georenderer.css';
 
@@ -19,7 +19,7 @@ Plugin.register(PLUGIN_ID, {
 	about: [
 		'在 **视图 → GeoRenderer** 中打开',
 		'',
-		'- 左键拖拽旋转，右键/Shift+左键平移，滚轮缩放',
+		'- 五步都在独立窗口中完成；前两步可检查模型，第 3 步确定最终镜头',
 		'- 可载入 `.hdr` 或普通图片作为环境贴图',
 		'- “阴影捕捉 + 背景透明” 可导出带投影的透明 PNG',
 		'',
@@ -38,7 +38,7 @@ Plugin.register(PLUGIN_ID, {
 
 		action = new Action('georenderer_open', {
 			name: 'GeoRenderer',
-			description: '在独立窗口中用路径追踪渲染当前模型',
+			description: '在独立窗口配置场景并渲染当前模型',
 			icon: 'auto_awesome',
 			category: 'view',
 			condition: () => typeof Project !== 'undefined' && !!Project,
@@ -67,7 +67,9 @@ Plugin.register(PLUGIN_ID, {
 			Blockbench.on('undo', eventHandler);
 			Blockbench.on('redo', eventHandler);
 			selectionHandler = () => {
-				if (PTR.nodes.groupList && typeof Group !== 'undefined' && Group.first_selected) selectGroup(Group.first_selected.uuid);
+				if (!PTR.nodes.groupList) return;
+				if (typeof Group !== 'undefined' && Group.first_selected) selectGroup(Group.first_selected.uuid);
+				else if (typeof Outliner !== 'undefined' && Outliner.selected?.[0]) selectGroupForElement(Outliner.selected[0]);
 			};
 			Blockbench.on('update_selection', selectionHandler);
 		} catch (err) { }
