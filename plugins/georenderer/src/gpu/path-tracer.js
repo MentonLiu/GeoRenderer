@@ -87,13 +87,13 @@ export class PathTracer {
 		return this;
 	}
 
-	buildScene(settings, overrides, groupOverrides, options) {
+	buildScene(settings, overrides, groupOverrides) {
 		const gl = this.gl;
 		const t0 = performance.now();
 
 		this.disposeScene();
 
-		const geo = collectGeometry(options);
+		const geo = collectGeometry();
 		const mats = buildMaterials(gl, geo.texRefs, geo.groupRefs, settings, overrides, groupOverrides);
 		const bvh = buildBVH(geo.positions, geo.triCount);
 

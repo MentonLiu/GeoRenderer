@@ -4,7 +4,6 @@ import { PTR, loadSettings } from './ui/state.js';
 import { closeWindow, openWindow } from './ui/window.js';
 import { buildGroupList, selectGroup, selectGroupForElement } from './ui/group-panel.js';
 import { buildMaterialList } from './ui/material-panel.js';
-import { isTraceStep } from './ui/workflow-state.js';
 import CSS from './assets/georenderer.css';
 
 let action = null;
@@ -56,7 +55,7 @@ Plugin.register(PLUGIN_ID, {
 			if (PTR.nodes.groupList) buildGroupList();
 			if (PTR.nodes.matlist) buildMaterialList();
 			if (!PTR.open || !PTR.tracer) { PTR.needsRebuild = true; return; }
-			if (!isTraceStep(PTR.step) || PTR.settings.auto_follow) {
+			if (PTR.settings.auto_follow) {
 				clearTimeout(PTR.rebuildTimer);
 				PTR.rebuildTimer = setTimeout(() => rebuildScene(), 400);
 			} else {

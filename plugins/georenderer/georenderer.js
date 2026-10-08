@@ -376,24 +376,6 @@
   function canNavigatePreview(id) {
     return isInspectionStep(id) || canMoveCamera(id);
   }
-  function resolveRenderSettings(settings2, step) {
-    if (step === "materials") return { ...settings2, ground_on: false, aperture: 0 };
-    if (step === "scene") return { ...settings2, aperture: 0 };
-    return settings2;
-  }
-  function resolveRenderCamera(step, inspectionCam, cam, lockedCamera, sceneFov) {
-    if (isInspectionStep(step)) {
-      const state = inspectionCam.state();
-      if (step === "scene" && sceneFov && !state.ortho) state.fov = sceneFov;
-      return state;
-    }
-    return isTraceStep(step) && lockedCamera ? lockedCamera : cam.state();
-  }
-  function resolveSampleTarget(settings2, step, finalStarted) {
-    if (step === "export" && finalStarted) return Math.max(1, settings2.final_samples);
-    if (!isTraceStep(step)) return Math.max(32, Math.min(256, settings2.preview_samples));
-    return Math.max(1, settings2.preview_samples);
-  }
   function canExport(step, finalStarted, spp, finalSamples) {
     return step === "export" && !!finalStarted && spp >= Math.max(1, finalSamples);
   }
@@ -403,16 +385,10 @@
     return null;
   }
   function resolveRenderSize(settings2, step, finalStarted, viewport, interacting) {
-    const inspection = isInspectionStep(step);
-    let width = !inspection && settings2.res_mode === "custom" ? settings2.res_width : Math.max(64, Math.floor(viewport.width));
-    let height = !inspection && settings2.res_mode === "custom" ? settings2.res_height : Math.max(64, Math.floor(viewport.height));
-    if (step !== "export" || !finalStarted) {
+    let width = settings2.res_mode === "custom" ? settings2.res_width : Math.max(64, Math.floor(viewport.width));
+    let height = settings2.res_mode === "custom" ? settings2.res_height : Math.max(64, Math.floor(viewport.height));
+    if (step === "preview" || step === "export" && !finalStarted) {
       const scale = Math.max(0.25, Math.min(1, settings2.preview_scale || 1));
-      width *= scale;
-      height *= scale;
-    }
-    if (!isTraceStep(step)) {
-      const scale = Math.min(1, 1024 / Math.max(width, height));
       width *= scale;
       height *= scale;
     }
@@ -422,158 +398,6 @@
       height *= scale;
     }
     return { width: Math.max(8, Math.round(width)), height: Math.max(8, Math.round(height)) };
-  }
-
-  // plugins/georenderer/src/scene/blockbench-scene.js
-  var convertedCubemaps = /* @__PURE__ */ new WeakMap();
-  var selectedSceneId = "";
-  var previewModelOverrides = {};
-  function restoreBlockbenchPreviewModelOverrides(overrides) {
-    previewModelOverrides = overrides && typeof overrides === "object" ? { ...overrides } : {};
-  }
-  function setBlockbenchPreviewModelEnabled(id, enabled) {
-    const model = typeof PreviewModel !== "undefined" ? PreviewModel.models?.[id] : null;
-    const nativeEnabled = !!(model && PreviewModel.getActiveModels?.().includes(model));
-    if (!!enabled === nativeEnabled) delete previewModelOverrides[id];
-    else previewModelOverrides[id] = !!enabled;
-    if (enabled && model && !model.enabled) model.update?.();
-    return { ...previewModelOverrides };
-  }
-  function sceneOwnedModels() {
-    return new Set(
-      Object.values(typeof PreviewScene !== "undefined" ? PreviewScene.scenes || {} : {}).flatMap((item) => item.preview_models || [])
-    );
-  }
-  function listBlockbenchPreviewModels() {
-    const owned = sceneOwnedModels();
-    const active = new Set(typeof PreviewModel !== "undefined" && PreviewModel.getActiveModels ? PreviewModel.getActiveModels() : []);
-    return Object.values(typeof PreviewModel !== "undefined" ? PreviewModel.models || {} : {}).filter((model) => !model.internal && !owned.has(model) && model.model_3d?.isObject3D).map((model) => ({
-      id: model.id,
-      name: model.name || model.id,
-      enabled: Object.hasOwn(previewModelOverrides, model.id) ? !!previewModelOverrides[model.id] : active.has(model)
-    }));
-  }
-  function registeredScene(id) {
-    return typeof PreviewScene !== "undefined" ? PreviewScene.scenes?.[id] || null : null;
-  }
-  function restoreBlockbenchSceneSelection(id) {
-    selectedSceneId = registeredScene(id)?.id || "";
-    return activeBlockbenchScene();
-  }
-  async function prepareScene(scene) {
-    if (scene.require_minecraft_eula) {
-      if (typeof MinecraftEULA === "undefined" || !await MinecraftEULA.promptUser("preview_scenes")) return false;
-    }
-    if (!scene.loaded && scene.lazyLoadFromWeb) {
-      try {
-        await scene.lazyLoadFromWeb();
-      } catch (err) {
-        scene.loaded = false;
-        throw err;
-      }
-    }
-    for (const model of scene.preview_models || []) {
-      if (!model.enabled) model.update?.();
-    }
-    return true;
-  }
-  function cubeFace(direction) {
-    const [x, y, z] = direction;
-    const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
-    if (ax >= ay && ax >= az) return x > 0 ? [0, -z / ax, -y / ax] : [1, z / ax, -y / ax];
-    if (ay >= ax && ay >= az) return y > 0 ? [2, x / ay, z / ay] : [3, x / ay, -z / ay];
-    return z > 0 ? [4, x / az, -y / az] : [5, -x / az, -y / az];
-  }
-  function cubemapToEquirect(cubemap, width = 512, height = 256) {
-    const faces = cubemap && cubemap.image;
-    if (!Array.isArray(faces) || faces.length !== 6) return null;
-    const faceData = Array.from({ length: 6 }, (_, index) => {
-      const face = faces[index];
-      const image = face && (face.image || face);
-      if (!image || !image.width || !image.height) throw new Error("Blockbench 环境贴图尚未加载完成");
-      const canvas = document.createElement("canvas");
-      canvas.width = image.width;
-      canvas.height = image.height;
-      const context = canvas.getContext("2d", { willReadFrequently: true });
-      context.drawImage(image, 0, 0);
-      return { width: canvas.width, height: canvas.height, data: context.getImageData(0, 0, canvas.width, canvas.height).data };
-    });
-    const data = new Float32Array(width * height * 4);
-    for (let y = 0; y < height; y++) {
-      const latitude = Math.PI * (0.5 - (y + 0.5) / height);
-      for (let x = 0; x < width; x++) {
-        const longitude = 2 * Math.PI * ((x + 0.5) / width - 0.5);
-        const direction = [Math.cos(latitude) * Math.cos(longitude), Math.sin(latitude), Math.cos(latitude) * Math.sin(longitude)];
-        const [index, u, v] = cubeFace(direction);
-        const face = faceData[index];
-        const fx = Math.max(0, Math.min(face.width - 1, Math.floor((u + 1) * 0.5 * face.width)));
-        const fy = Math.max(0, Math.min(face.height - 1, Math.floor((v + 1) * 0.5 * face.height)));
-        const source = (fy * face.width + fx) * 4;
-        const destination = (y * width + x) * 4;
-        for (let channel = 0; channel < 3; channel++) data[destination + channel] = srgbToLinear(face.data[source + channel] / 255);
-        data[destination + 3] = 1;
-      }
-    }
-    return { width, height, data };
-  }
-  function cubemapReady(cubemap) {
-    const faces = cubemap?.image;
-    return Array.isArray(faces) && faces.length === 6 && Array.from({ length: 6 }, (_, index) => faces[index]).every((face) => {
-      const image = face?.image || face;
-      return image && image.width > 0 && image.height > 0 && (!("complete" in image) || image.complete && image.naturalWidth > 0);
-    });
-  }
-  async function waitForCubemap(cubemap, timeout = 15e3) {
-    const deadline = Date.now() + timeout;
-    while (!cubemapReady(cubemap)) {
-      if (Date.now() >= deadline) throw new Error("Blockbench 场景立方体贴图加载超时");
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-  async function loadBlockbenchScene(id) {
-    const scene = registeredScene(id);
-    if (!scene) return null;
-    if (!await prepareScene(scene)) return null;
-    if (!scene.cubemap) return { cubemap: null, environment: null };
-    const cubemap = scene.cubemap;
-    await waitForCubemap(cubemap);
-    if (!convertedCubemaps.has(cubemap)) convertedCubemaps.set(cubemap, cubemapToEquirect(cubemap));
-    return { cubemap, environment: convertedCubemaps.get(cubemap) };
-  }
-  function activeBlockbenchPreviewModels() {
-    const scene = activeBlockbenchScene();
-    const sceneModels = scene?.preview_models || [];
-    const owned = sceneOwnedModels();
-    const nativeActive = typeof PreviewModel !== "undefined" && PreviewModel.getActiveModels ? PreviewModel.getActiveModels().filter((model) => !owned.has(model)) : [];
-    const independent = new Set(nativeActive);
-    for (const model of Object.values(typeof PreviewModel !== "undefined" ? PreviewModel.models || {} : {})) {
-      if (owned.has(model) || !Object.hasOwn(previewModelOverrides, model.id)) continue;
-      if (previewModelOverrides[model.id]) independent.add(model);
-      else independent.delete(model);
-    }
-    return [.../* @__PURE__ */ new Set([...sceneModels, ...independent])].filter((model) => model?.model_3d?.isObject3D);
-  }
-  function listBlockbenchScenes() {
-    if (typeof PreviewScene === "undefined") return [];
-    return Object.values(PreviewScene.scenes || {}).map((scene) => ({
-      id: scene.id,
-      name: scene.name || scene.id,
-      category: scene.category || "other"
-    }));
-  }
-  function activeBlockbenchScene() {
-    return registeredScene(selectedSceneId);
-  }
-  async function selectBlockbenchScene(id) {
-    if (!id) {
-      selectedSceneId = "";
-      return true;
-    }
-    const scene = registeredScene(id);
-    if (!scene) return false;
-    if (!await prepareScene(scene)) return false;
-    selectedSceneId = id;
-    return true;
   }
 
   // plugins/georenderer/src/ui/render-loop.js
@@ -589,12 +413,12 @@
   function rebuildScene() {
     const t = PTR.tracer;
     if (!t) return;
-    if (!PTR.open) {
+    if (!PTR.open || !isTraceStep(PTR.step)) {
       PTR.needsRebuild = true;
       return;
     }
     try {
-      const scene = t.buildScene(resolveRenderSettings(PTR.settings, PTR.step), PTR.overrides, PTR.groupOverrides, { includePreviewModels: PTR.step !== "materials" });
+      const scene = t.buildScene(PTR.settings, PTR.overrides, PTR.groupOverrides);
       for (const image of scene.pendingImages || []) {
         if (image.complete && image.naturalWidth) {
           queueMicrotask(rebuildScene);
@@ -605,7 +429,6 @@
         image.addEventListener("load", () => rebuildScene(), { once: true });
       }
       PTR.stale = false;
-      PTR.needsRebuild = false;
       if (PTR.refreshMaterialList) PTR.refreshMaterialList();
       updateStatus(scene);
       t.reset();
@@ -615,7 +438,7 @@
   }
   function applyResolution() {
     const t = PTR.tracer;
-    if (!t || !PTR.open || !PTR.nodes.viewport) return;
+    if (!t || !PTR.open || !isTraceStep(PTR.step) || !PTR.nodes.viewport) return;
     const rect = (PTR.nodes.frame || PTR.nodes.viewport).getBoundingClientRect();
     const { width: nw, height: nh } = resolveRenderSize(PTR.settings, PTR.step, PTR.finalStarted, rect, PTR.interacting);
     if (nw !== t.width || nh !== t.height) {
@@ -643,7 +466,7 @@
     return fast;
   }
   function currentMaxSamples() {
-    return resolveSampleTarget(PTR.settings, PTR.step, PTR.finalStarted);
+    return PTR.settings.render_mode === "final" ? PTR.settings.final_samples : PTR.settings.preview_samples;
   }
   function updateStatus(scene) {
     const t = PTR.tracer;
@@ -679,10 +502,6 @@
     const t = PTR.tracer;
     if (!wm) return;
     const s = PTR.settings;
-    if (!isTraceStep(PTR.step)) {
-      wm.style.display = "none";
-      return;
-    }
     if (!s.watermark_enable || !s.watermark_text || !t || !t.width || !t.height) {
       wm.style.display = "none";
       return;
@@ -716,7 +535,7 @@
     wm.textContent = s.watermark_text;
   }
   function loop() {
-    if (!PTR.open) return;
+    if (!PTR.open || !isTraceStep(PTR.step)) return;
     if (PTR.nodes.canvas && !PTR.nodes.canvas.isConnected) {
       closeRenderer();
       return;
@@ -724,22 +543,6 @@
     PTR.raf = requestAnimationFrame(loop);
     const t = PTR.tracer;
     if (!t || !t.scene || !t.env || PTR.paused) return;
-    if (canMoveCamera(PTR.step) && PTR.settings.auto_sync && PTR.cam.syncFromPreview()) {
-      const cam = PTR.cam;
-      if (PTR.settings.fov !== cam.fov || PTR.settings.ortho !== cam.ortho || PTR.settings.camera_distance !== cam.distance) {
-        PTR.settings.fov = cam.fov;
-        PTR.settings.ortho = cam.ortho;
-        PTR.settings.camera_distance = cam.distance;
-        PTR.onCameraSynced?.();
-        saveSettings();
-      }
-    }
-    const camera = resolveRenderCamera(PTR.step, PTR.inspectionCam, PTR.cam, PTR.lockedCamera, activeBlockbenchScene()?.fov);
-    const cameraKey = JSON.stringify(camera);
-    if (t.previewCameraKey !== cameraKey) {
-      t.setCamera(camera);
-      t.previewCameraKey = cameraKey;
-    }
     const now = performance.now();
     const dt = now - PTR.lastFrame;
     PTR.lastFrame = now;
@@ -756,9 +559,8 @@
     const maxSamples = currentMaxSamples();
     if (t.spp >= maxSamples) return;
     try {
-      t.setCameraOnly(camera);
-      const settings2 = resolveRenderSettings(PTR.settings, PTR.step);
-      const passSettings = PTR.interacting ? interactiveSettings(settings2) : settings2;
+      t.setCameraOnly(PTR.lockedCamera || PTR.cam.state());
+      const passSettings = PTR.interacting ? interactiveSettings(PTR.settings) : PTR.settings;
       const n = Math.min(PTR.passesPerFrame, maxSamples - t.spp);
       if (n > 0 && t.beginFrame(passSettings, PTR.interacting)) {
         for (let i = 0; i < n; i++) t.renderPass();
@@ -766,7 +568,7 @@
       } else {
         PTR.lastPasses = 0;
       }
-      t.present(PTR.interacting ? Object.assign({}, settings2, { denoise: false, bloom_enable: false }) : settings2);
+      t.present(PTR.interacting ? Object.assign({}, PTR.settings, { denoise: false, bloom_enable: false }) : PTR.settings);
     } catch (err) {
       showError(err);
       PTR.paused = true;
@@ -779,7 +581,7 @@
     PTR.raf = 0;
   }
   function resumeRenderer() {
-    if (!PTR.tracer || PTR.open) return;
+    if (!PTR.tracer || PTR.open || !isTraceStep(PTR.step)) return;
     PTR.open = true;
     PTR.paused = false;
     PTR.lastFrame = performance.now();
@@ -1357,6 +1159,158 @@
     return { cond, marg, width: DW, height: DH };
   }
 
+  // plugins/georenderer/src/scene/blockbench-scene.js
+  var convertedCubemaps = /* @__PURE__ */ new WeakMap();
+  var selectedSceneId = "";
+  var previewModelOverrides = {};
+  function restoreBlockbenchPreviewModelOverrides(overrides) {
+    previewModelOverrides = overrides && typeof overrides === "object" ? { ...overrides } : {};
+  }
+  function setBlockbenchPreviewModelEnabled(id, enabled) {
+    const model = typeof PreviewModel !== "undefined" ? PreviewModel.models?.[id] : null;
+    const nativeEnabled = !!(model && PreviewModel.getActiveModels?.().includes(model));
+    if (!!enabled === nativeEnabled) delete previewModelOverrides[id];
+    else previewModelOverrides[id] = !!enabled;
+    if (enabled && model && !model.enabled) model.update?.();
+    return { ...previewModelOverrides };
+  }
+  function sceneOwnedModels() {
+    return new Set(
+      Object.values(typeof PreviewScene !== "undefined" ? PreviewScene.scenes || {} : {}).flatMap((item) => item.preview_models || [])
+    );
+  }
+  function listBlockbenchPreviewModels() {
+    const owned = sceneOwnedModels();
+    const active = new Set(typeof PreviewModel !== "undefined" && PreviewModel.getActiveModels ? PreviewModel.getActiveModels() : []);
+    return Object.values(typeof PreviewModel !== "undefined" ? PreviewModel.models || {} : {}).filter((model) => !model.internal && !owned.has(model) && model.model_3d?.isObject3D).map((model) => ({
+      id: model.id,
+      name: model.name || model.id,
+      enabled: Object.hasOwn(previewModelOverrides, model.id) ? !!previewModelOverrides[model.id] : active.has(model)
+    }));
+  }
+  function registeredScene(id) {
+    return typeof PreviewScene !== "undefined" ? PreviewScene.scenes?.[id] || null : null;
+  }
+  function restoreBlockbenchSceneSelection(id) {
+    selectedSceneId = registeredScene(id)?.id || "";
+    return activeBlockbenchScene();
+  }
+  async function prepareScene(scene) {
+    if (scene.require_minecraft_eula) {
+      if (typeof MinecraftEULA === "undefined" || !await MinecraftEULA.promptUser("preview_scenes")) return false;
+    }
+    if (!scene.loaded && scene.lazyLoadFromWeb) {
+      try {
+        await scene.lazyLoadFromWeb();
+      } catch (err) {
+        scene.loaded = false;
+        throw err;
+      }
+    }
+    for (const model of scene.preview_models || []) {
+      if (!model.enabled) model.update?.();
+    }
+    return true;
+  }
+  function cubeFace(direction) {
+    const [x, y, z] = direction;
+    const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
+    if (ax >= ay && ax >= az) return x > 0 ? [0, -z / ax, -y / ax] : [1, z / ax, -y / ax];
+    if (ay >= ax && ay >= az) return y > 0 ? [2, x / ay, z / ay] : [3, x / ay, -z / ay];
+    return z > 0 ? [4, x / az, -y / az] : [5, -x / az, -y / az];
+  }
+  function cubemapToEquirect(cubemap, width = 512, height = 256) {
+    const faces = cubemap && cubemap.image;
+    if (!Array.isArray(faces) || faces.length !== 6) return null;
+    const faceData = Array.from({ length: 6 }, (_, index) => {
+      const face = faces[index];
+      const image = face && (face.image || face);
+      if (!image || !image.width || !image.height) throw new Error("Blockbench 环境贴图尚未加载完成");
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.drawImage(image, 0, 0);
+      return { width: canvas.width, height: canvas.height, data: context.getImageData(0, 0, canvas.width, canvas.height).data };
+    });
+    const data = new Float32Array(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      const latitude = Math.PI * (0.5 - (y + 0.5) / height);
+      for (let x = 0; x < width; x++) {
+        const longitude = 2 * Math.PI * ((x + 0.5) / width - 0.5);
+        const direction = [Math.cos(latitude) * Math.cos(longitude), Math.sin(latitude), Math.cos(latitude) * Math.sin(longitude)];
+        const [index, u, v] = cubeFace(direction);
+        const face = faceData[index];
+        const fx = Math.max(0, Math.min(face.width - 1, Math.floor((u + 1) * 0.5 * face.width)));
+        const fy = Math.max(0, Math.min(face.height - 1, Math.floor((v + 1) * 0.5 * face.height)));
+        const source = (fy * face.width + fx) * 4;
+        const destination = (y * width + x) * 4;
+        for (let channel = 0; channel < 3; channel++) data[destination + channel] = srgbToLinear(face.data[source + channel] / 255);
+        data[destination + 3] = 1;
+      }
+    }
+    return { width, height, data };
+  }
+  function cubemapReady(cubemap) {
+    const faces = cubemap?.image;
+    return Array.isArray(faces) && faces.length === 6 && Array.from({ length: 6 }, (_, index) => faces[index]).every((face) => {
+      const image = face?.image || face;
+      return image && image.width > 0 && image.height > 0 && (!("complete" in image) || image.complete && image.naturalWidth > 0);
+    });
+  }
+  async function waitForCubemap(cubemap, timeout = 15e3) {
+    const deadline = Date.now() + timeout;
+    while (!cubemapReady(cubemap)) {
+      if (Date.now() >= deadline) throw new Error("Blockbench 场景立方体贴图加载超时");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  async function loadBlockbenchScene(id) {
+    const scene = registeredScene(id);
+    if (!scene) return null;
+    if (!await prepareScene(scene)) return null;
+    if (!scene.cubemap) return { cubemap: null, environment: null };
+    const cubemap = scene.cubemap;
+    await waitForCubemap(cubemap);
+    if (!convertedCubemaps.has(cubemap)) convertedCubemaps.set(cubemap, cubemapToEquirect(cubemap));
+    return { cubemap, environment: convertedCubemaps.get(cubemap) };
+  }
+  function activeBlockbenchPreviewModels() {
+    const scene = activeBlockbenchScene();
+    const sceneModels = scene?.preview_models || [];
+    const owned = sceneOwnedModels();
+    const nativeActive = typeof PreviewModel !== "undefined" && PreviewModel.getActiveModels ? PreviewModel.getActiveModels().filter((model) => !owned.has(model)) : [];
+    const independent = new Set(nativeActive);
+    for (const model of Object.values(typeof PreviewModel !== "undefined" ? PreviewModel.models || {} : {})) {
+      if (owned.has(model) || !Object.hasOwn(previewModelOverrides, model.id)) continue;
+      if (previewModelOverrides[model.id]) independent.add(model);
+      else independent.delete(model);
+    }
+    return [.../* @__PURE__ */ new Set([...sceneModels, ...independent])].filter((model) => model?.model_3d?.isObject3D);
+  }
+  function listBlockbenchScenes() {
+    if (typeof PreviewScene === "undefined") return [];
+    return Object.values(PreviewScene.scenes || {}).map((scene) => ({
+      id: scene.id,
+      name: scene.name || scene.id,
+      category: scene.category || "other"
+    }));
+  }
+  function activeBlockbenchScene() {
+    return registeredScene(selectedSceneId);
+  }
+  async function selectBlockbenchScene(id) {
+    if (!id) {
+      selectedSceneId = "";
+      return true;
+    }
+    const scene = registeredScene(id);
+    if (!scene) return false;
+    if (!await prepareScene(scene)) return false;
+    selectedSceneId = id;
+    return true;
+  }
+
   // plugins/georenderer/src/scene/group-overrides.js
   function groupChainForElement(element) {
     const chain = [];
@@ -1465,7 +1419,7 @@
     }
     return map;
   }
-  function collectGeometry({ includePreviewModels = true } = {}) {
+  function collectGeometry() {
     const positions = [];
     const normals = [];
     const uvs = [];
@@ -1562,9 +1516,9 @@
         insideOnly.push(insideOnlyFace);
       }
     });
-    const activeScene = includePreviewModels ? activeBlockbenchScene() : null;
+    const activeScene = activeBlockbenchScene();
     const previewMaterials = /* @__PURE__ */ new Map();
-    const previewModels = includePreviewModels ? activeBlockbenchPreviewModels() : [];
+    const previewModels = activeBlockbenchPreviewModels();
     for (const model of previewModels) {
       const root = model.model_3d;
       root.updateWorldMatrix(true, true);
@@ -2060,11 +2014,11 @@
       gl.disable(gl.CULL_FACE);
       return this;
     }
-    buildScene(settings2, overrides, groupOverrides, options) {
+    buildScene(settings2, overrides, groupOverrides) {
       const gl = this.gl;
       const t0 = performance.now();
       this.disposeScene();
-      const geo = collectGeometry(options);
+      const geo = collectGeometry();
       const mats = buildMaterials(gl, geo.texRefs, geo.groupRefs, settings2, overrides, groupOverrides);
       const bvh = buildBVH(geo.positions, geo.triCount);
       const n = geo.triCount;
@@ -4073,7 +4027,7 @@
       this.renderer.toneMapping = { none: THREE.NoToneMapping, reinhard: THREE.ReinhardToneMapping, filmic: THREE.CineonToneMapping }[settings2.tone_mapping] ?? THREE.ACESFilmicToneMapping;
       this.renderer.toneMappingExposure = settings2.exposure;
       for (const material of this.ownedMaterials) material.envMapIntensity = settings2.env_intensity;
-      if (!this.overlayOnly && settings2.auto_sync && PTR.step === "camera" && PTR.cam.syncFromPreview()) {
+      if (settings2.auto_sync && PTR.step === "camera" && PTR.cam.syncFromPreview()) {
         if (settings2.fov !== PTR.cam.fov || settings2.ortho !== PTR.cam.ortho || settings2.camera_distance !== PTR.cam.distance) {
           settings2.fov = PTR.cam.fov;
           settings2.ortho = PTR.cam.ortho;
@@ -4102,11 +4056,11 @@
       target.lookAt(...cam.target);
       target.updateMatrixWorld(true);
       this.activeCamera = target;
-      this.previewModels.visible = !this.overlayOnly && PTR.step !== "materials";
+      this.previewModels.visible = PTR.step !== "materials";
       const previewModels = this.previewModels.visible ? this.syncPreviewModels() : [];
       this.grid.visible = PTR.step === "materials";
       const hasSceneGeometry = blockbenchScene?.preview_models?.some((model) => previewModels.includes(model));
-      const showGround = !this.overlayOnly && !this.grid.visible && !hasSceneGeometry;
+      const showGround = !this.grid.visible && !hasSceneGeometry;
       this.floor.visible = showGround && !!settings2.ground_on && !(settings2.ground_radius > 0);
       this.groundDisk.visible = showGround && !!settings2.ground_on && settings2.ground_radius > 0;
       this.floor.position.y = settings2.ground_y;
@@ -4130,17 +4084,9 @@
       this.sun.intensity = Math.max(0, settings2.sun_intensity / 4);
       this.sun.color.set(settings2.sun_color);
       this.scene.fog = blockbenchScene?.fog || null;
-      this.scene.environment = this.overlayOnly ? null : this.environment.sync(settings2, PTR.customEnv);
-      this.scene.background = this.overlayOnly || settings2.bg_mode === "transparent" ? null : this.grid.visible ? new THREE.Color("#20242b") : blockbenchScene?.cubemap && settings2.bg_mode === "env" ? blockbenchScene.cubemap : new THREE.Color(settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
-      if (this.overlayOnly) {
-        for (const material of this.ownedMaterials) material.colorWrite = false;
-        this.scene.fog = null;
-      }
-      try {
-        this.renderer.render(this.scene, target);
-      } finally {
-        if (this.overlayOnly) for (const material of this.ownedMaterials) material.colorWrite = true;
-      }
+      this.scene.environment = this.environment.sync(settings2, PTR.customEnv);
+      this.scene.background = this.grid.visible ? new THREE.Color("#20242b") : settings2.bg_mode === "transparent" ? null : blockbenchScene?.cubemap && settings2.bg_mode === "env" ? blockbenchScene.cubemap : new THREE.Color(settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
+      this.renderer.render(this.scene, target);
     }
     start() {
       if (this.running) return;
@@ -4183,7 +4129,7 @@
     const endDrag = () => {
       dragging = 0;
       canvas.classList.remove("dragging");
-      if (canNavigatePreview(PTR.step)) {
+      if (canMoveCamera(PTR.step)) {
         clearTimeout(PTR.interactTimer);
         PTR.interactTimer = setTimeout(() => setInteracting(false), 200);
       }
@@ -4202,7 +4148,7 @@
       if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) moved = true;
       if (!moved) return;
       canvas.classList.add("dragging");
-      if (canNavigatePreview(PTR.step)) {
+      if (canMoveCamera(PTR.step)) {
         clearTimeout(PTR.interactTimer);
         setInteracting(true);
       }
@@ -4213,7 +4159,7 @@
       const camera = activeCamera();
       if (dragging === 1) camera.orbit(dx, dy);
       else camera.pan(dx / Math.max(canvas.clientWidth, 1), dy / Math.max(canvas.clientHeight, 1), 1);
-      if (PTR.tracer) PTR.tracer.reset();
+      if (canMoveCamera(PTR.step) && PTR.tracer) PTR.tracer.reset();
     });
     canvas.addEventListener("pointerup", (e) => {
       if (dragging && !moved && PTR.step === "materials" && e.button === 0) {
@@ -4238,7 +4184,7 @@
         syncControls();
         saveSettings();
       }
-      if (canNavigatePreview(PTR.step)) {
+      if (canMoveCamera(PTR.step)) {
         clearTimeout(PTR.interactTimer);
         setInteracting(true);
         PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
@@ -4417,7 +4363,6 @@
   function ensureRasterPreview() {
     if (PTR.raster) return;
     PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
-    PTR.raster.overlayOnly = true;
     PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
   }
   function updateExportActions() {
@@ -4430,7 +4375,6 @@
   }
   function setStep(id) {
     if (stepIndex(id) < 0 || !PTR.dialog) return;
-    const previousStep = PTR.step;
     const wasTrace = isTraceStep(PTR.step);
     const trace = isTraceStep(id);
     if (id === "camera" || trace) initializeCamera();
@@ -4446,40 +4390,48 @@
       PTR.nodes.navButtons[step.id].setAttribute("aria-current", active ? "step" : "false");
       PTR.nodes.stagePanes[step.id].hidden = !active;
     }
-    PTR.nodes.canvas.style.display = "block";
+    PTR.nodes.canvas.style.display = trace ? "block" : "none";
     PTR.nodes.rasterCanvas.style.display = trace ? "none" : "block";
-    PTR.nodes.overlay.style.display = "";
+    PTR.nodes.overlay.style.display = trace ? "" : "none";
     PTR.nodes.watermark.style.display = trace ? "" : "none";
-    PTR.nodes.footer.style.display = "flex";
+    PTR.nodes.footer.style.display = trace ? "flex" : "none";
     PTR.nodes.btnStart.style.display = id === "export" ? "" : "none";
     PTR.nodes.btnSave.style.display = id === "export" ? "" : "none";
     PTR.nodes.btnCopy.style.display = id === "export" ? "" : "none";
     PTR.nodes.btnBlockbench.style.display = id === "export" ? "" : "none";
-    PTR.nodes.btnPause.style.display = id !== "export" || PTR.finalStarted ? "" : "none";
-    PTR.nodes.toolGroup.style.display = id !== "export" ? "flex" : "none";
-    if (trace) PTR.raster?.stop();
-    else PTR.raster?.start();
-    fitFrame();
-    if (id !== "export" || !PTR.finalStarted) {
-      PTR.settings.render_mode = "preview";
-      PTR.finalStarted = false;
-    }
-    if (!PTR.tracer) {
-      try {
-        startRenderer();
-      } catch (err) {
-        showError(err);
+    PTR.nodes.btnPause.style.display = id === "preview" || PTR.finalStarted ? "" : "none";
+    PTR.nodes.toolGroup.style.display = id === "preview" ? "flex" : "none";
+    if (trace) {
+      if (PTR.raster) PTR.raster.stop();
+      if (!PTR.tracer) {
+        PTR.settings.render_mode = "preview";
+        PTR.finalStarted = false;
+        try {
+          startRenderer();
+        } catch (err) {
+          showError(err);
+        }
+      } else {
+        if (!wasTrace) PTR.tracer.setCamera(PTR.lockedCamera);
+        if (!PTR.open) resumeRenderer();
+        if (id === "preview" || !PTR.finalStarted) {
+          if (PTR.settings.render_mode !== "preview") PTR.tracer.reset();
+          PTR.settings.render_mode = "preview";
+          PTR.finalStarted = false;
+        }
+        if (PTR.needsRebuild || !wasTrace) {
+          PTR.needsRebuild = false;
+          PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+          rebuildScene();
+        }
       }
     } else {
-      if (PTR.needsRebuild || previousStep === "materials" !== (id === "materials")) rebuildScene();
-      if (previousStep !== id) {
-        PTR.tracer.reset();
-        PTR.tracer.previewCameraKey = null;
-      }
-      if (!trace || !wasTrace) PTR.paused = false;
-      if (!PTR.open) resumeRenderer();
-      applyResolution();
+      if (wasTrace && PTR.tracer) pauseRenderer();
+      PTR.finalStarted = false;
+      PTR.raster?.start();
     }
+    fitFrame();
+    if (trace && PTR.tracer) applyResolution();
     updateExportSummary();
     updateExportActions();
     saveSettings();
@@ -4520,10 +4472,10 @@
       applyResolution();
       tracer.setEnvironment(PTR.settings, PTR.customEnv);
       rebuildScene();
-      tracer.setCamera(resolveRenderCamera(PTR.step, PTR.inspectionCam, PTR.cam, PTR.lockedCamera, activeBlockbenchScene()?.fov));
+      tracer.setCamera(PTR.lockedCamera || PTR.cam.state());
       if (window.ResizeObserver) {
         PTR.resizeObs = new ResizeObserver(() => {
-          if (isInspectionStep(PTR.step) || PTR.settings.res_mode === "fit") applyResolution();
+          if (PTR.settings.res_mode === "fit") applyResolution();
         });
         PTR.resizeObs.observe(PTR.nodes.frame);
       }
@@ -4577,7 +4529,6 @@
         updateExportSummary();
       };
       PTR.onRenderStatus = updateExportActions;
-      PTR.onCameraSynced = syncControls;
       PTR.onSettingsLoaded = syncSettingsToView;
       setStep("materials");
     } catch (err) {
@@ -4609,7 +4560,6 @@
     }
     PTR.onSettingChanged = null;
     PTR.onRenderStatus = null;
-    PTR.onCameraSynced = null;
     PTR.onSettingsLoaded = null;
     PTR.needsRebuild = false;
     PTR.refreshMaterialList = null;
@@ -4649,14 +4599,14 @@
 	background-size: 16px 16px;
 	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
 }
-#ptr_frame #ptr_raster_canvas { position: absolute; inset: 0; z-index: 1; background: none; }
+#ptr_raster_canvas { position: absolute; inset: 0; }
 #ptr_frame[data-step="materials"] #ptr_raster_canvas:not(.dragging) { cursor: pointer; }
 #ptr_canvas { position: absolute; inset: 0; }
 #ptr_frame[data-step="preview"] #ptr_canvas,
 #ptr_frame[data-step="export"] #ptr_canvas { cursor: default; }
 #ptr_viewport canvas.dragging { cursor: grabbing; }
 #ptr_overlay {
-	position: absolute; left: 8px; top: 8px; z-index: 2; pointer-events: none;
+	position: absolute; left: 8px; top: 8px; pointer-events: none;
 	font-size: 11px; color: #fff; text-shadow: 0 1px 3px #000;
 	background: rgba(0,0,0,0.45); padding: 3px 7px; border-radius: 3px;
 }
@@ -4841,7 +4791,7 @@
           PTR.needsRebuild = true;
           return;
         }
-        if (!isTraceStep(PTR.step) || PTR.settings.auto_follow) {
+        if (PTR.settings.auto_follow) {
           clearTimeout(PTR.rebuildTimer);
           PTR.rebuildTimer = setTimeout(() => rebuildScene(), 400);
         } else {
