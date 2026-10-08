@@ -8,6 +8,7 @@ import { buildEnvDistribution, generateSkyPixels, resampleEquirect, sunDirection
 import { collectGeometry } from '../scene/geometry.js';
 import { buildMaterials } from '../scene/materials.js';
 import { materialKey } from '../scene/group-overrides.js';
+import { applyEnvironmentCycle, environmentCycle } from '../scene/day-cycle.js';
 
 export class PathTracer {
 	constructor(canvas) {
@@ -221,7 +222,7 @@ export class PathTracer {
 			const scale = Math.min(1, limit / customImage.width, limit / customImage.height);
 			w = Math.max(1, Math.round(customImage.width * scale));
 			h = Math.max(1, Math.round(customImage.height * scale));
-			pixels = resampleEquirect(customImage, w, h);
+			pixels = applyEnvironmentCycle(resampleEquirect(customImage, w, h), settings);
 		} else {
 			pixels = generateSkyPixels(settings);
 		}
@@ -415,7 +416,8 @@ export class PathTracer {
 		const bg = hexToLinear(settings.bg_color);
 		gl.uniform3f(u.uBgColor, bg[0], bg[1], bg[2]);
 
-		const sunOn = settings.sun_enable && settings.sun_intensity > 0;
+		const cycle = environmentCycle(settings);
+		const sunOn = settings.sun_enable && settings.sun_intensity > 0 && cycle.sunStrength > 0;
 		gl.uniform1i(u.uSunEnable, sunOn ? 1 : 0);
 		if (sunOn) {
 			const dir = sunDirection(settings);
@@ -423,11 +425,11 @@ export class PathTracer {
 			const cosR = Math.cos(radius);
 			const solid = Math.max(2 * Math.PI * (1 - cosR), 1e-7);
 			const col = hexToLinear(settings.sun_color);
-			const scale = settings.sun_intensity / solid;
+			const scale = settings.sun_intensity * cycle.sunStrength / solid;
 			gl.uniform3f(u.uSunDir, dir[0], dir[1], dir[2]);
 			gl.uniform1f(u.uSunCosRadius, cosR);
 			gl.uniform1f(u.uSunSolidAngle, solid);
-			gl.uniform3f(u.uSunRadiance, col[0] * scale, col[1] * scale, col[2] * scale);
+			gl.uniform3f(u.uSunRadiance, col[0] * scale * cycle.sunTint[0], col[1] * scale * cycle.sunTint[1], col[2] * scale * cycle.sunTint[2]);
 		} else {
 			gl.uniform3f(u.uSunDir, 0, 1, 0);
 			gl.uniform1f(u.uSunCosRadius, 2);
@@ -438,7 +440,7 @@ export class PathTracer {
 		gl.uniform1i(u.uGroundOn, settings.ground_on && !s.sceneTriCount ? 1 : 0);
 		const fog = s.fog;
 		gl.uniform1i(u.uFogMode, fog ? (fog.isFogExp2 ? 2 : 1) : 0);
-		gl.uniform3f(u.uFogColor, fog?.color?.r || 0, fog?.color?.g || 0, fog?.color?.b || 0);
+		gl.uniform3f(u.uFogColor, (fog?.color?.r || 0) * cycle.brightness * cycle.tint[0], (fog?.color?.g || 0) * cycle.brightness * cycle.tint[1], (fog?.color?.b || 0) * cycle.brightness * cycle.tint[2]);
 		gl.uniform1f(u.uFogNear, fog?.near || 0);
 		gl.uniform1f(u.uFogFar, fog?.far || 1);
 		gl.uniform1f(u.uFogDensity, fog?.density || 0);

@@ -1,6 +1,6 @@
 import { hexToLinear, srgbToLinear } from '../core/math.js';
 import { getMaterialSide, textureSource } from '../scene/geometry.js';
-import { resolveMaterialOverride } from '../scene/group-overrides.js';
+import { resolveEmissionStrength, resolveMaterialOverride } from '../scene/group-overrides.js';
 
 function linearColor(color, value) {
 	color.setRGB(...hexToLinear(value));
@@ -44,7 +44,7 @@ export class RasterMaterials {
 		return copy;
 	}
 
-	merMaps(texture, colorImage) {
+	merMaps(texture) {
 		const image = textureSource(texture);
 		if (!image) return {};
 		const key = `mer:${texture.uuid}`;
@@ -54,21 +54,44 @@ export class RasterMaterials {
 		const ctx = canvas.getContext('2d', { willReadFrequently: true });
 		ctx.drawImage(image, 0, 0);
 		const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-		const emission = document.createElement('canvas');
-		emission.width = canvas.width; emission.height = canvas.height;
-		const ec = emission.getContext('2d', { willReadFrequently: true });
-		if (colorImage) ec.drawImage(colorImage, 0, 0, canvas.width, canvas.height);
-		else { ec.fillStyle = '#ffffff'; ec.fillRect(0, 0, canvas.width, canvas.height); }
-		const ed = ec.getImageData(0, 0, canvas.width, canvas.height);
 		for (let i = 0; i < data.data.length; i += 4) {
-			const metal = data.data[i], power = data.data[i + 1] / 255, rough = data.data[i + 2];
+			const metal = data.data[i], rough = data.data[i + 2];
 			data.data[i + 1] = rough; data.data[i + 2] = metal;
-			for (let c = 0; c < 3; c++) ed.data[i + c] = Math.round(srgbToLinear(ed.data[i + c] / 255) * power * 255);
 		}
-		ctx.putImageData(data, 0, 0); ec.putImageData(ed, 0, 0);
-		const maps = { surface: this.texture(canvas, THREE.LinearEncoding), emission: this.texture(emission, THREE.LinearEncoding) };
+		ctx.putImageData(data, 0, 0);
+		const maps = { surface: this.texture(canvas, THREE.LinearEncoding) };
 		this.textures.set(key, maps);
 		return maps;
+	}
+
+	emissionMap(texture, colorImage, source, channel = null) {
+		const image = textureSource(texture);
+		if (!image) return null;
+		const key = `emission:${texture.uuid}:${channel}:${source}`;
+		if (this.textures.has(key)) return this.textures.get(key).emission;
+		const canvas = document.createElement('canvas');
+		canvas.width = image.width; canvas.height = image.height;
+		const ctx = canvas.getContext('2d', { willReadFrequently: true });
+		ctx.drawImage(image, 0, 0);
+		const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+		let base = null;
+		if (source === 'main' && colorImage) {
+			ctx.drawImage(colorImage, 0, 0, canvas.width, canvas.height);
+			base = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+		}
+		for (let i = 0; i < data.data.length; i += 4) {
+			const rgb = [0, 1, 2].map(c => srgbToLinear(data.data[i + c] / 255));
+			const power = channel != null ? data.data[i + channel] / 255 : rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+			for (let c = 0; c < 3; c++) {
+				const value = source === 'custom' ? power : source === 'main' ? (base ? srgbToLinear(base[i + c] / 255) : 1) * power : rgb[c];
+				data.data[i + c] = Math.round(value * 255);
+			}
+			data.data[i + 3] = 255;
+		}
+		ctx.putImageData(data, 0, 0);
+		const emission = this.texture(canvas, THREE.LinearEncoding);
+		this.textures.set(key, { emission });
+		return emission;
 	}
 
 	create(source, groupChain) {
@@ -100,7 +123,7 @@ export class RasterMaterials {
 		material.opacity = source.opacity ?? 1;
 		material.vertexColors = !!source.vertexColors;
 		const mer = channels.find(t => t.pbr_channel === 'mer');
-		const maps = this.merMaps(mer, colorImage || sourceMap?.image);
+		const maps = this.merMaps(mer);
 		if (maps.surface) {
 			if (ov.roughness == null) { material.roughnessMap = maps.surface; material.roughness = 1; }
 			if (ov.metalness == null) { material.metalnessMap = maps.surface; material.metalness = 1; }
@@ -108,16 +131,41 @@ export class RasterMaterials {
 		const normal = channels.find(t => t.pbr_channel === 'normal');
 		material.normalMap = this.texture(textureSource(normal), THREE.LinearEncoding) || source.normalMap || null;
 		material.normalScale.setScalar(ov.normal_scale ?? 1);
-		const emissiveDefault = mer || texture?.render_mode === 'emissive' || texture?.render_mode === 'additive' ? 1 : 0;
-		material.emissiveIntensity = (ov.emissive ?? emissiveDefault) * settings.emissive_strength;
-		linearColor(material.emissive, ov.emissive != null ? (ov.emissive_color || '#ffffff') : '#ffffff');
-		material.emissive.multiply(material.color);
-		material.emissiveMap = ov.emissive != null ? map : maps.emission || map;
-		if (ov.emissive == null && !mer && ov.emissive_map) {
-			const image = textureSource(((typeof Texture !== 'undefined' && Texture.all) || []).find(t => t.uuid === ov.emissive_map));
-			material.emissiveMap = this.texture(image);
+		const emissionTexture = !mer && ov.emissive_map ? ((typeof Texture !== 'undefined' && Texture.all) || []).find(t => t.uuid === ov.emissive_map) : null;
+		const emissiveDefault = mer || emissionTexture || texture?.render_mode === 'emissive' || texture?.render_mode === 'additive' ? 1 : 0;
+		material.emissiveIntensity = resolveEmissionStrength(ov, groupChain, this.groupOverrides, settings, emissiveDefault);
+		const colorSource = ov.emissive_color_source || 'map';
+		material.emissive.setRGB(1, 1, 1);
+		if (colorSource === 'custom') linearColor(material.emissive, ov.emissive_color || '#ffffff');
+		else if (mer || !emissionTexture || colorSource === 'main') {
+			material.emissive.copy(material.color);
+			if (colorSource !== 'main' && ov.emissive_color) material.emissive.multiply(new THREE.Color().setRGB(...hexToLinear(ov.emissive_color)));
 		}
+		material.emissiveMap = mer || emissionTexture
+			? this.emissionMap(mer || emissionTexture, colorImage || sourceMap?.image, colorSource === 'custom' ? 'custom' : mer || colorSource === 'main' ? 'main' : 'map', mer ? 1 : null)
+			: colorSource === 'custom' ? null : map;
 		if (ov.transmission > 0) { material.transmission = ov.transmission; material.ior = ov.ior ?? 1.5; }
+		this.materials.push(material);
+		return material;
+	}
+
+	createPreview(source) {
+		const material = new THREE.MeshStandardMaterial();
+		if (source.color?.isColor) material.color.copy(source.color);
+		material.map = this.texture(source.map?.image, THREE.sRGBEncoding, source.map);
+		material.roughness = source.roughness ?? 1;
+		material.metalness = source.metalness ?? 0;
+		for (const key of ['roughnessMap', 'metalnessMap', 'normalMap', 'aoMap']) {
+			material[key] = this.texture(source[key]?.image, THREE.LinearEncoding, source[key]);
+		}
+		if (source.normalScale) material.normalScale.copy(source.normalScale);
+		if (source.emissive?.isColor) material.emissive.copy(source.emissive);
+		else material.emissive.setRGB(0, 0, 0);
+		material.emissiveIntensity = source.emissiveIntensity ?? 1;
+		material.emissiveMap = this.texture(source.emissiveMap?.image, THREE.sRGBEncoding, source.emissiveMap);
+		for (const key of ['side', 'transparent', 'opacity', 'alphaTest', 'depthWrite', 'vertexColors', 'flatShading', 'visible']) {
+			if (source[key] !== undefined) material[key] = source[key];
+		}
 		this.materials.push(material);
 		return material;
 	}

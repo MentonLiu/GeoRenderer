@@ -1,5 +1,6 @@
 import { ENV_DIST_H, ENV_DIST_W, ENV_H, ENV_W } from '../core/config.js';
 import { clamp, hexToLinear, vNorm } from '../core/math.js';
+import { applyEnvironmentCycle, environmentCycle } from './day-cycle.js';
 
 export function parseHDR(buffer) {
 	const bytes = new Uint8Array(buffer);
@@ -123,8 +124,7 @@ export function generateSkyPixels(settings, w = ENV_W, h = ENV_H) {
 	const sun = sunDirection(settings);
 	const glowPower = 8 + 260 * (1 - haze);
 	const glowStrength = 0.35 + 2.5 * haze;
-	const daylight = clamp((Math.sin(((settings.time_of_day ?? 12) - 6) * Math.PI / 12) + 0.2) / 1.2, 0, 1);
-	const skyExposure = mode === 'sky' ? 0.08 + daylight * 0.92 : 1;
+	const cycle = environmentCycle(settings);
 
 	for (let y = 0; y < h; y++) {
 		const theta = ((y + 0.5) / h) * Math.PI;
@@ -158,17 +158,19 @@ export function generateSkyPixels(settings, w = ENV_W, h = ENV_H) {
 				}
 				const cosA = dx * sun[0] + dy * sun[1] + dz * sun[2];
 				if (cosA > 0 && settings.sun_enable && settings.sun_intensity > 0) {
-					const glow = Math.pow(cosA, glowPower) * glowStrength;
+					const glow = Math.pow(cosA, glowPower) * glowStrength * cycle.sunStrength;
 					r += sunCol[0] * glow;
 					g += sunCol[1] * glow;
 					b += sunCol[2] * glow;
 				}
+				const dusk = cycle.twilight * Math.exp(-dy * dy / 0.035) * (0.25 + 0.75 * Math.max(cosA, 0));
+				r += 0.8 * dusk; g += 0.16 * dusk; b += 0.025 * dusk;
 			}
 
-			out[o] = r * skyExposure; out[o + 1] = g * skyExposure; out[o + 2] = b * skyExposure; out[o + 3] = 1;
+			out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = 1;
 		}
 	}
-	return out;
+	return applyEnvironmentCycle(out, settings);
 }
 
 export function sunDirection(settings) {

@@ -3,7 +3,7 @@ import { clamp, hexToLinear } from '../core/math.js';
 import { createAtlasTexture } from '../gpu/webgl.js';
 import { packAtlas } from './atlas.js';
 import { MF_ADDITIVE, MF_EMIS_CUSTOM_COLOR, MF_EMIS_MAIN_COLOR, MF_FULLBRIGHT, MF_HAS_COLOR, MF_HAS_EMISSIVE_MAP, MF_HAS_MER, MF_HAS_NORMAL, MF_WRAP_REPEAT, getMaterialSide, textureSource } from './geometry.js';
-import { materialKey, resolveMaterialOverride } from './group-overrides.js';
+import { materialKey, resolveEmissionStrength, resolveMaterialOverride } from './group-overrides.js';
 
 export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, groupOverrides) {
 	const slotList = [];
@@ -178,18 +178,18 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 		const preview = slot.previewMaterial;
 		if (preview) {
 			const tint = preview.color || { r: 1, g: 1, b: 1 };
-			const basic = !!preview.isMeshBasicMaterial;
 			const emissive = preview.emissive || { r: 0, g: 0, b: 0 };
-			const emissivePower = Math.max(emissive.r, emissive.g, emissive.b) * (preview.emissiveIntensity ?? 1);
-			const emits = basic || emissivePower > 0;
+			const emissivePower = Math.max(emissive.r || 0, emissive.g || 0, emissive.b || 0) * (preview.emissiveIntensity ?? 1);
+			// Unlit Blockbench preview shading does not make walls/floors physical emitters.
+			const emits = emissivePower > 0;
 			let flags = slot.color ? MF_HAS_COLOR : 0;
 			if (preview.map?.wrapS === 1000 || preview.map?.wrapT === 1000) flags |= MF_WRAP_REPEAT;
 			if (emits) flags |= 512;
 			matData.set([tint.r, tint.g, tint.b, flags], o);
 			matData.set([slot.rect.x, slot.rect.y, slot.rect.w, slot.rect.h], o + 4);
-			matData.set([preview.roughness ?? 1, preview.metalness ?? 0, basic ? 1 : (preview.emissiveIntensity ?? 1), 1.5], o + 8);
+			matData.set([preview.roughness ?? 1, preview.metalness ?? 0, emits ? (preview.emissiveIntensity ?? 1) : 0, 1.5], o + 8);
 			matData.set([0, preview.alphaTest || 0, 1, preview.transparent ? 2 : preview.alphaTest > 0 ? 1 : 0], o + 12);
-			matData.set([basic ? 1 : emissive.r, basic ? 1 : emissive.g, basic ? 1 : emissive.b, preview.opacity ?? 1], o + 16);
+			matData.set([emissive.r || 0, emissive.g || 0, emissive.b || 0, preview.opacity ?? 1], o + 16);
 			slot.emissive = emits;
 			return;
 		}
@@ -199,7 +199,7 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 		const hasEmissiveMap = !!slot.emissiveMap;
 		const fullbrightTex = !!(tex && (tex.render_mode === 'emissive' || tex.render_mode === 'additive'));
 		const defEmis = (hasMER || hasEmissiveMap || fullbrightTex) ? 1 : 0;
-		const emisVal = (ov.emissive != null ? ov.emissive : defEmis) * settings.emissive_strength;
+		const emisVal = resolveEmissionStrength(ov, slot.groupChain, groupOverrides, settings, defEmis);
 
 		let flags = 0;
 		if (slot.color) flags |= MF_HAS_COLOR;

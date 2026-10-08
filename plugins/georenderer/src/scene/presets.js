@@ -1,4 +1,5 @@
 import { clamp } from '../core/math.js';
+import { dayCycle } from './day-cycle.js';
 
 export const SCENE_PRESETS = {
 	studio: { label: '工作室', env_mode: 'gradient', grad_top: '#dce2e8', grad_bottom: '#30343b', sky_horizon: '#bec8d2', ground_color: '#aab0b6', sun_color: '#ffffff', sun_intensity: 5, env_intensity: 1.2 },
@@ -18,9 +19,10 @@ export function applyPreset(settings, id) {
 export function applyTimeOfDay(settings, hour) {
 	const time = clamp(Number(hour) || 0, 0, 24);
 	settings.time_of_day = time;
-	settings.sun_azimuth = time * 15;
-	settings.sun_elevation = Math.sin((time - 6) * Math.PI / 12) * 70;
-	settings.sun_enable = time >= 5.5 && time <= 18.5;
+	const cycle = dayCycle(time);
+	settings.sun_azimuth = cycle.azimuth;
+	settings.sun_elevation = cycle.elevation;
+	settings.sun_enable = cycle.sunStrength > 0;
 	return time;
 }
 

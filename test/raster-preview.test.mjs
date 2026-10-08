@@ -84,7 +84,7 @@ function previewFixture(t, material, overrides = { body: { roughness: 0.3 } }) {
 	};
 	globalThis.Canvas = { scene: { updateMatrixWorld() {} } };
 	globalThis.Outliner = { elements: [{ mesh: source, parent: { uuid: 'body' } }] };
-	globalThis.THREE = { Texture: PreviewTexture, MeshStandardMaterial: StandardMaterial, MeshPhysicalMaterial: StandardMaterial, sRGBEncoding: 3001, LinearEncoding: 3000, NearestFilter: 1003, LinearFilter: 1006 };
+	globalThis.THREE = { Color, Texture: PreviewTexture, MeshStandardMaterial: StandardMaterial, MeshPhysicalMaterial: StandardMaterial, sRGBEncoding: 3001, LinearEncoding: 3000, NearestFilter: 1003, LinearFilter: 1006 };
 	globalThis.Texture = { all: [] };
 	globalThis.TextureGroup = { all: [] };
 	PTR.settings = { ...previous.settings, emissive_strength: 1 };
@@ -179,7 +179,7 @@ test('material arrays retain textures and reset to PBR defaults without disposin
 	assert.equal(materials.some(material => material.disposed), false);
 });
 
-test('preview resolves texture, parent and child overrides and applies the global emission multiplier', t => {
+test('preview resolves texture, parent and child overrides with independent part emission', t => {
 	const source = shaderMaterial(new PreviewTexture({ width: 2, height: 2 }));
 	previewFixture(t, source);
 	const texture = { uuid: 'skin', getMaterial: () => source };
@@ -189,11 +189,11 @@ test('preview resolves texture, parent and child overrides and applies the globa
 	const copy = materials.create(source, ['child', 'parent']);
 	assert.equal(copy.roughness, 0.02);
 	assert.equal(copy.metalness, 1);
-	assert.equal(copy.emissiveIntensity, 10);
+	assert.equal(copy.emissiveIntensity, 20);
 	assert.deepEqual(copy.emissive.rgb, [0, 1, 1]);
 	assert.equal(copy.emissiveMap, copy.map);
 	PTR.settings.emissive_strength = 0;
-	assert.equal(materials.create(source, ['child', 'parent']).emissiveIntensity, 0);
+	assert.equal(materials.create(source, ['child', 'parent']).emissiveIntensity, 20);
 	materials.dispose();
 });
 
@@ -246,7 +246,7 @@ test('MER preview channels are remapped and explicit group parameters take prece
 	const overridden = resources.create(source, ['body']);
 	assert.equal(overridden.roughnessMap, undefined);
 	assert.equal(overridden.metalnessMap, undefined);
-	assert.equal(overridden.emissiveMap, overridden.map);
+	assert.deepEqual(Array.from(overridden.emissiveMap.image.pixels.slice(0, 4)), [128, 28, 0, 255]);
 	assert.equal(overridden.emissiveIntensity, 20);
 	assert.equal(merImage.pixels[1], 128);
 	resources.dispose();

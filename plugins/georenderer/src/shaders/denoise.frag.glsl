@@ -57,18 +57,21 @@ void main() {
 	vec3 cp = loadColor(px, size);
 	float varP = loadVariance(px, size);
 	float depthP = loadDepth(px, size);
+	float roughness = texelFetch(uAlbedoTex, px, 0).a * uInvSpp;
 	// Preserve background texture detail instead of smoothing it with the model denoiser.
-	if (depthP >= 999999.0) {
+	// Mirror reflections already converge well; broad filtering would erase their detail.
+	if (depthP >= 999999.0 || roughness < 0.1 || (roughness < 0.4 && uStepSize > 2)) {
 		fragColor = vec4(cp, 1.0);
 		outVariance = varP;
 		return;
 	}
 	vec3 np = texelFetch(uNormalTex, px, 0).xyz;
 	vec3 ap = texelFetch(uAlbedoTex, px, 0).rgb * uInvSpp;
+	float materialP = texelFetch(uNormalTex, px, 0).a * uInvSpp;
 	float nl = length(np);
 	np = nl > 1e-6 ? np / nl : vec3(0.0, 1.0, 0.0);
 
-	float phiColor = uPhiColorBase * sqrt(max(varP, 0.0)) + 1e-4;
+	float phiColor = uPhiColorBase * mix(0.35, 1.0, smoothstep(0.1, 0.7, roughness)) * sqrt(max(varP, 0.0)) + 1e-4;
 
 	vec3 sum = vec3(0.0);
 	float wsum = 0.0;
@@ -83,6 +86,7 @@ void main() {
 			float depthQ = loadDepth(q, size);
 			vec3 nq = texelFetch(uNormalTex, q, 0).xyz;
 			vec3 aq = texelFetch(uAlbedoTex, q, 0).rgb * uInvSpp;
+			float materialQ = texelFetch(uNormalTex, q, 0).a * uInvSpp;
 			float ql = length(nq);
 			nq = ql > 1e-6 ? nq / ql : vec3(0.0, 1.0, 0.0);
 
@@ -96,7 +100,8 @@ void main() {
 			// Material texture edges must remain boundaries even at high denoise strength.
 			vec3 da = ap - aq;
 			float wa = exp(-dot(da, da) / 0.0025);
-			float w = kern(dx) * kern(dy) * wc * wn * wd * wa;
+			float wm = exp(-16.0 * abs(materialP - materialQ));
+			float w = kern(dx) * kern(dy) * wc * wn * wd * wa * wm;
 			sum += cq * w;
 			wsum += w;
 			varSum += varQ * w * w;

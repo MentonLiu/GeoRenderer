@@ -51,6 +51,7 @@ export const DEFAULTS = {
 	background_preset: '',
 	preview_model_overrides: {},
 	time_of_day: 12,
+	day_cycle: true,
 	env_intensity: 1.0,
 	env_rotation: 0,
 	bg_mode: 'env',
@@ -58,8 +59,8 @@ export const DEFAULTS = {
 	background_blur: 0,
 
 	sun_enable: true,
-	sun_elevation: 48,
-	sun_azimuth: 140,
+	sun_elevation: 70,
+	sun_azimuth: 180,
 	sun_angle: 1.2,
 	sun_intensity: 6.0,
 	sun_color: '#fff2dd',

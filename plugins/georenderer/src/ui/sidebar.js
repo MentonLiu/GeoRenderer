@@ -62,7 +62,7 @@ export async function syncBlockbenchBackground() {
 		if (scene && PTR.customEnvSource !== 'file' && !loaded) throw new Error('背景未能加载，请检查 Minecraft EULA 状态');
 		// Blockbench's studio has no skybox; give its independent background a neutral studio gradient.
 		if (loaded && !loaded.environment && scene.id === 'studio') {
-			loaded.environment = { width: 512, height: 256, data: generateSkyPixels({ ...PTR.settings, ...SCENE_PRESETS.studio, sun_enable: false }, 512, 256) };
+			loaded.environment = { width: 512, height: 256, data: generateSkyPixels({ ...PTR.settings, ...SCENE_PRESETS.studio, day_cycle: false, sun_enable: false }, 512, 256) };
 		}
 		PTR.backgroundScene = loaded ? scene : null;
 		PTR.sceneCubemap = loaded?.cubemap || null;
@@ -313,7 +313,8 @@ export function buildSidebar() {
 		card('时间', 'schedule', [
 			rowSlider('当前时间', 'time_of_day', 0, 24, 0.25, 2),
 			PTR.nodes.timeDisplay,
-			el('div', { class: 'ptr_note', text: '时间会联动 GeoRenderer 的太阳光；背景预设的贴图保持原样。' }),
+			rowCheck('联动环境昼夜', 'day_cycle'),
+			el('div', { class: 'ptr_note', text: '00:00 / 24:00 为午夜，06:00 日出，12:00 正午，18:00 日落。联动时，天空、背景图片、环境照明和雾一起变化；晨昏偏暖，夜间偏冷。关闭后可保留 HDR / 工作室的固定环境光。' }),
 		]),
 		card('独立参照模型', 'accessibility_new', [
 			previewModelList,
@@ -367,8 +368,8 @@ export function buildSidebar() {
 		card('材质默认值', 'palette', [
 			rowSlider('默认粗糙度', 'def_roughness', 0, 1, 0.01, 2),
 			rowSlider('默认金属度', 'def_metalness', 0, 1, 0.01, 2),
-			rowSlider('全局自发光倍率', 'emissive_strength', 0, 40, 0.1, 2),
-			el('div', { class: 'ptr_note', text: '部位与纹理的自发光强度都会乘以此倍率；0 会关闭所有自发光，1 保持设置的强度。' }),
+			rowSlider('纹理自发光倍率', 'emissive_strength', 0, 40, 0.1, 2),
+			el('div', { class: 'ptr_note', text: '倍率控制纹理原有的自发光；部位的自发光强度独立生效，设为 0 可关闭该部位发光。' }),
 			rowSelect('渲染面', 'render_sides', { auto: '跟随 Blockbench', double: '强制双面', front: '强制单面' }),
 			el('div', { class: 'ptr_note', text: '跟随 Blockbench 时会按格式/纹理做背面剔除（Java 方块模型为单面），负尺寸方块因此只显示内部贴图，与视图一致。' }),
 			rowSelect('Alpha 模式', 'alpha_mode', { cutout: '裁剪（Minecraft）', blend: '混合（半透明）', opaque: '忽略透明' }),
@@ -395,6 +396,7 @@ export function buildSidebar() {
 		]),
 		card('色调映射', 'tune', [
 			rowSelect('色调映射', 'tone_mapping', { none: '无', reinhard: 'Reinhard', aces: 'ACES', filmic: 'Filmic', agx: 'AgX' }),
+			el('div', { class: 'ptr_note', text: '观察反射和自发光时建议使用 ACES 或 AgX。“无”会截断过亮的高光，容易让不同材质看起来都一样亮。' }),
 			rowSlider('曝光', 'exposure', 0.05, 8, 0.01, 2),
 			rowSlider('对比度', 'contrast', 0.2, 3, 0.01, 2),
 			rowSlider('饱和度', 'saturation', 0, 3, 0.01, 2),
