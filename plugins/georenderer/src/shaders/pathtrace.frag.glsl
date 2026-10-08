@@ -17,6 +17,9 @@ precision highp sampler2D;
 #define MF_HAS_EMISSIVE_MAP 64
 #define MF_EMIS_MAIN_COLOR  128
 #define MF_EMIS_CUSTOM_COLOR 256
+#define MF_FORCE_EMISSION 512
+#define MF_FORCE_ROUGHNESS 1024
+#define MF_FORCE_METALNESS 2048
 
 uniform vec2 uResolution;
 uniform int  uSeed;
@@ -58,6 +61,9 @@ uniform vec3 uSunRadiance;
 uniform int  uGroundOn, uGroundCatcher;
 uniform float uGroundY, uGroundRough, uGroundMetal, uGroundRadius;
 uniform vec3 uGroundColor;
+uniform int uGroundTexOn;
+uniform vec4 uGroundRect;
+uniform float uGroundTexScale;
 
 uniform sampler2D uAccum;
 #ifndef PTR_COLOR_ONLY
@@ -300,6 +306,7 @@ vec3 triEmission(int i, vec2 bc) {
 	bool rep = (m.flags & MF_WRAP_REPEAT) != 0;
 	vec3 base = m.tint;
 	if ((m.flags & MF_HAS_COLOR) != 0) base *= srgbToLin(sampleAtlas(uAtlasC, m.rect, uv, rep).rgb);
+	if ((m.flags & MF_FORCE_EMISSION) != 0) return base * m.emisColor * m.emis;
 	if ((m.flags & MF_HAS_MER) != 0) {
 		float e = sampleAtlas(uAtlasM, m.rect, uv, rep).g;
 		return base * e * m.emis;
@@ -339,6 +346,10 @@ Surface getSurface(Hit hit, vec3 ro, vec3 rd) {
 		s.ns = s.ng;
 		s.uv = vec2(0.0);
 		s.albedo = uGroundColor;
+		if (uGroundTexOn == 1) {
+			vec2 groundUV = s.pos.xz / max(uGroundTexScale, 0.01);
+			s.albedo *= srgbToLin(sampleAtlas(uAtlasC, uGroundRect, groundUV, true).rgb);
+		}
 		s.rough = uGroundRough;
 		s.metal = uGroundMetal;
 		if (rd.y > 0.0) { s.ng = -s.ng; s.ns = -s.ns; }
@@ -407,6 +418,9 @@ Surface getSurface(Hit hit, vec3 ro, vec3 rd) {
 	} else if ((m.flags & MF_FULLBRIGHT) != 0) {
 		s.emission = base * m.emis;
 	}
+	if ((m.flags & MF_FORCE_EMISSION) != 0) s.emission = base * m.emisColor * m.emis;
+	if ((m.flags & MF_FORCE_ROUGHNESS) != 0) s.rough = clamp(m.rough, 0.015, 1.0);
+	if ((m.flags & MF_FORCE_METALNESS) != 0) s.metal = clamp(m.metal, 0.0, 1.0);
 
 	if ((m.flags & MF_HAS_NORMAL) != 0 && m.nscale > 0.0) {
 		vec2 d1 = uv1 - uv0;

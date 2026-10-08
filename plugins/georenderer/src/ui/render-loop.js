@@ -1,6 +1,7 @@
 import { IDLE_PASS_CAP, INTERACTIVE_MAX_BOUNCE, INTERACTIVE_PASS_CAP } from '../core/config.js';
 import { clamp } from '../core/math.js';
 import { PTR, formatDuration, saveSettings } from './state.js';
+import { resolveRenderSize } from './workflow-state.js';
 
 export function showError(err) {
 	console.error('[PathTracer]', err);
@@ -10,9 +11,10 @@ export function showError(err) {
 
 export function rebuildScene() {
 	const t = PTR.tracer;
-	if (!t || !PTR.open) return;
+	if (!t) return;
+	if (!PTR.open) { PTR.needsRebuild = true; return; }
 	try {
-		const scene = t.buildScene(PTR.settings, PTR.overrides);
+		const scene = t.buildScene(PTR.settings, PTR.overrides, PTR.groupOverrides);
 		PTR.stale = false;
 		if (PTR.refreshMaterialList) PTR.refreshMaterialList();
 		updateStatus(scene);
@@ -24,18 +26,9 @@ export function rebuildScene() {
 
 export function applyResolution() {
 	const t = PTR.tracer;
-	if (!t || !PTR.nodes.viewport) return;
-	const rect = PTR.nodes.viewport.getBoundingClientRect();
-	let w, h;
-	if (PTR.settings.res_mode === 'custom') {
-		w = PTR.settings.res_width;
-		h = PTR.settings.res_height;
-	} else {
-		w = Math.max(64, Math.floor(rect.width));
-		h = Math.max(64, Math.floor(rect.height));
-	}
-	const scale = PTR.interacting ? clamp(PTR.settings.interactive_scale, 0.2, 1) : 1;
-	const nw = Math.round(w * scale), nh = Math.round(h * scale);
+	if (!t || !PTR.open || !PTR.nodes.viewport) return;
+	const rect = (PTR.nodes.frame || PTR.nodes.viewport).getBoundingClientRect();
+	const { width: nw, height: nh } = resolveRenderSize(PTR.settings, PTR.step, PTR.finalStarted, rect, PTR.interacting);
 	if (nw !== t.width || nh !== t.height) {
 		PTR.spsEma = 0;
 		PTR.lastPasses = 0;
@@ -93,6 +86,7 @@ export function updateStatus(scene) {
 	if (PTR.nodes.overlay) {
 		PTR.nodes.overlay.textContent = t.spp >= max ? '渲染完成 · ' + t.spp + ' spp' : t.spp + ' spp';
 	}
+	if (PTR.onRenderStatus) PTR.onRenderStatus();
 	updateWatermarkPreview();
 }
 
@@ -185,10 +179,22 @@ export function loop() {
 	updateStatus();
 }
 
-export function closeRenderer() {
+export function pauseRenderer() {
 	PTR.open = false;
 	cancelAnimationFrame(PTR.raf);
 	PTR.raf = 0;
+}
+
+export function resumeRenderer() {
+	if (!PTR.tracer || PTR.open) return;
+	PTR.open = true;
+	PTR.paused = false;
+	PTR.lastFrame = performance.now();
+	loop();
+}
+
+export function closeRenderer() {
+	pauseRenderer();
 	if (PTR.resizeObs) { try { PTR.resizeObs.disconnect(); } catch (e) { } PTR.resizeObs = null; }
 	if (PTR.tracer) { try { PTR.tracer.dispose(); } catch (e) { } PTR.tracer = null; }
 	saveSettings();

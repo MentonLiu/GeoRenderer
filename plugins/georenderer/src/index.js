@@ -1,7 +1,9 @@
 import { PLUGIN_ID } from './core/config.js';
-import { closeRenderer, rebuildScene, updateStatus } from './ui/render-loop.js';
+import { rebuildScene, updateStatus } from './ui/render-loop.js';
 import { PTR, loadSettings } from './ui/state.js';
-import { openWindow } from './ui/window.js';
+import { closeWindow, openWindow } from './ui/window.js';
+import { buildGroupList } from './ui/group-panel.js';
+import { buildMaterialList } from './ui/material-panel.js';
 import CSS from './assets/georenderer.css';
 
 let action = null;
@@ -46,7 +48,11 @@ Plugin.register(PLUGIN_ID, {
 		try { MenuBar.addAction(action, 'tools'); } catch (err) { }
 
 		eventHandler = () => {
-			if (!PTR.open || !PTR.tracer) return;
+			if (PTR.raster) PTR.raster.refreshModel();
+			if (PTR.refreshGroundTextures) PTR.refreshGroundTextures();
+			if (PTR.nodes.groupList) buildGroupList();
+			if (PTR.nodes.matlist) buildMaterialList();
+			if (!PTR.open || !PTR.tracer) { PTR.needsRebuild = true; return; }
 			if (PTR.settings.auto_follow) {
 				clearTimeout(PTR.rebuildTimer);
 				PTR.rebuildTimer = setTimeout(() => rebuildScene(), 400);
@@ -63,7 +69,7 @@ Plugin.register(PLUGIN_ID, {
 	},
 
 	onunload() {
-		closeRenderer();
+		closeWindow();
 		if (PTR.dialog) { try { PTR.dialog.delete(); } catch (e) { } PTR.dialog = null; }
 		if (action) { action.delete(); action = null; }
 		if (cssHandle && cssHandle.delete) cssHandle.delete();

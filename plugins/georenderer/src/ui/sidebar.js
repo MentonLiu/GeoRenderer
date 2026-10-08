@@ -1,21 +1,47 @@
-import { buildTabs, card, rowCheck, rowColor, rowNumber, rowSelect, rowSlider, rowText, syncControls } from './controls.js';
+import { buildStages, card, makeRow, rowCheck, rowColor, rowNumber, rowSelect, rowSlider, rowText, syncControls } from './controls.js';
 import { el } from './dom.js';
 import { loadEnvFile } from './io.js';
-import { showError } from './render-loop.js';
-import { PTR, SKY_PRESETS, saveSettings } from './state.js';
+import { buildGroupList } from './group-panel.js';
+import { buildMaterialList } from './material-panel.js';
+import { rebuildScene, showError } from './render-loop.js';
+import { PTR, saveSettings } from './state.js';
+import { applyPreset, applyTimeOfDay, formatClock, SCENE_PRESETS } from '../scene/presets.js';
+import { loadBlockbenchScene } from '../scene/blockbench-scene.js';
+import { buildExportPanel, updateExportSummary } from './export-panel.js';
+
+function makeGroundTextureRow() {
+	const select = el('select');
+	PTR.refreshGroundTextures = () => {
+		select.replaceChildren(el('option', { value: '', text: '纯色地面' }));
+		for (const texture of (typeof Texture !== 'undefined' && Texture.all) || []) {
+			select.appendChild(el('option', { value: texture.uuid, text: texture.name || texture.uuid }));
+		}
+		select.value = PTR.settings.ground_texture_uuid || '';
+	};
+	PTR.refreshGroundTextures();
+	select.addEventListener('change', () => {
+		PTR.settings.ground_texture_uuid = select.value;
+		saveSettings();
+		if (PTR.raster) PTR.raster.setGroundTexture(((typeof Texture !== 'undefined' && Texture.all) || []).find(texture => texture.uuid === select.value));
+		if (PTR.tracer) rebuildScene();
+	});
+	return makeRow('地面纹理', [select]);
+}
 
 export function buildSidebar() {
 	PTR.controls = [];
 
-	const renderCards = [
-		card('分辨率与采样', 'photo_size_select_large', [
+	const resolutionCard = card('成片尺寸', 'photo_size_select_large', [
 			rowSelect('分辨率', 'res_mode', { fit: '自适应窗口', custom: '自定义' }),
 			rowNumber('宽度', 'res_width', 32, 8192, 1),
 			rowNumber('高度', 'res_height', 32, 8192, 1),
-			rowSelect('当前模式', 'render_mode', { preview: '预览（低采样）', final: '成片渲染' }),
+			el('div', { class: 'ptr_note', text: '画面左侧按最终长宽比取景；最终渲染使用这里的尺寸。' }),
+		]);
+	const renderCards = [
+		card('预览质量', 'preview', [
+			rowSlider('预览比例', 'preview_scale', 0.25, 1, 0.05, 2),
 			rowNumber('预览采样数', 'preview_samples', 1, 100000, 1),
-			rowNumber('成片采样数', 'final_samples', 1, 100000, 1),
-			el('div', { class: 'ptr_note', text: '调试时可以使用预览模式，渲染速度更快。确认效果后切到“成片渲染”获取更清晰的图片。' }),
+			el('div', { class: 'ptr_note', text: '预览使用缩小后的目标尺寸；进入最终渲染时恢复成片尺寸。' }),
 		]),
 		card('光线追踪', 'call_split', [
 			rowSlider('最大反弹', 'max_bounce', 1, 16, 1, 0),
@@ -39,14 +65,27 @@ export function buildSidebar() {
 		if (PTR.cam.syncFromPreview()) {
 			PTR.settings.fov = PTR.cam.fov;
 			PTR.settings.ortho = PTR.cam.ortho;
+			PTR.settings.camera_distance = PTR.cam.distance;
 			syncControls();
+			saveSettings();
 			if (PTR.tracer) PTR.tracer.reset();
 		}
 	});
 	const btnFrame = el('button', { class: 'ptr_btn', text: '框选模型' });
 	btnFrame.addEventListener('click', () => {
 		if (PTR.tracer && PTR.tracer.scene) PTR.cam.frameBounds(PTR.tracer.scene.bounds);
+		else if (PTR.raster && PTR.raster.model) {
+			const bounds = new THREE.Box3().setFromObject(PTR.raster.model);
+			if (!bounds.isEmpty()) {
+				const center = bounds.getCenter(new THREE.Vector3());
+				const size = bounds.getSize(new THREE.Vector3());
+				PTR.cam.frameBounds({ center: center.toArray(), radius: size.length() / 2 });
+			}
+		}
 		if (PTR.tracer) PTR.tracer.reset();
+		PTR.settings.camera_distance = PTR.cam.distance;
+		syncControls();
+		saveSettings();
 	});
 	camBtns.appendChild(btnSync);
 	camBtns.appendChild(btnFrame);
@@ -56,6 +95,7 @@ export function buildSidebar() {
 			camBtns,
 			rowCheck('正交投影', 'ortho'),
 			rowSlider('FOV', 'fov', 5, 120, 1, 0),
+			rowSlider('镜头距离', 'camera_distance', 0.5, 2000, 0.5, 1),
 			rowCheck('自动跟随主视图', 'auto_sync'),
 		]),
 		card('景深', 'filter_center_focus', [
@@ -66,21 +106,47 @@ export function buildSidebar() {
 	];
 
 	const presets = el('div', { class: 'ptr_presets' });
-	Object.keys(SKY_PRESETS).forEach(name => {
-		const b = el('button', { class: 'ptr_btn', text: name });
-		b.addEventListener('click', () => {
-			Object.assign(PTR.settings, SKY_PRESETS[name]);
+	PTR.nodes.sceneSource = el('div', { class: 'ptr_note', text: '可使用 Blockbench 已加载的场景贴图；不可用时使用相近的程序化氛围。' });
+	Object.entries(SCENE_PRESETS).forEach(([id, preset]) => {
+		const button = el('button', { class: 'ptr_btn', text: preset.label });
+		button.addEventListener('click', async () => {
+			const request = ++PTR.scenePresetRequest;
+			applyPreset(PTR.settings, id);
+			applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
+			PTR.sceneCubemap = null;
+			PTR.customEnv = null;
+			PTR.customEnvName = '';
+			PTR.nodes.sceneSource.textContent = '正在读取 Blockbench 场景…';
+			PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
 			syncControls();
 			saveSettings();
 			try {
-				if (PTR.tracer) {
-					PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
-					PTR.tracer.reset();
-				}
+				if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, null);
+				else if (PTR.tracer) PTR.needsRebuild = true;
 			} catch (err) { showError(err); }
+			try {
+				const builtIn = await loadBlockbenchScene(id);
+				if (request !== PTR.scenePresetRequest) return;
+				if (builtIn && builtIn.environment) {
+					PTR.sceneCubemap = builtIn.cubemap;
+					PTR.customEnv = builtIn.environment;
+					PTR.customEnvName = preset.label;
+					PTR.settings.env_mode = 'image';
+					PTR.nodes.sceneSource.textContent = '使用 Blockbench 内置“' + preset.label + '”环境贴图';
+					if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+					else if (PTR.tracer) PTR.needsRebuild = true;
+				} else {
+					PTR.nodes.sceneSource.textContent = '内置贴图不可用，使用“' + preset.label + '”程序化氛围';
+				}
+				syncControls();
+				saveSettings();
+			} catch (err) {
+				if (request === PTR.scenePresetRequest) PTR.nodes.sceneSource.textContent = '内置贴图读取失败，已使用程序化氛围';
+			}
 		});
-		presets.appendChild(b);
+		presets.appendChild(button);
 	});
+	PTR.nodes.timeDisplay = el('strong', { class: 'ptr_time', text: formatClock(PTR.settings.time_of_day) });
 
 	const envFile = el('input', { type: 'file', accept: '.hdr,.png,.jpg,.jpeg,.webp', style: { display: 'none' } });
 	envFile.addEventListener('change', () => {
@@ -97,15 +163,24 @@ export function buildSidebar() {
 		PTR.customEnvName = '';
 		PTR.nodes.envName.textContent = '(未载入)';
 		if (PTR.settings.env_mode === 'image') { PTR.settings.env_mode = 'sky'; syncControls(); }
-		try { if (PTR.tracer) PTR.tracer.setEnvironment(PTR.settings, null); } catch (err) { showError(err); }
+		try {
+			if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, null);
+			else if (PTR.tracer) PTR.needsRebuild = true;
+		} catch (err) { showError(err); }
 	});
 	envBtns.appendChild(btnLoad);
 	envBtns.appendChild(btnClear);
 	PTR.nodes.envName = el('span', { class: 'ptr_note', text: '(未载入)' });
 
 	const envCards = [
-		card('环境光', 'wb_sunny', [
+		card('场景与时间', 'public', [
 			presets,
+			PTR.nodes.sceneSource,
+			rowSlider('当前时间', 'time_of_day', 0, 24, 0.25, 2),
+			PTR.nodes.timeDisplay,
+			el('div', { class: 'ptr_note', text: '时间会联动太阳高度和方位；也可继续手动调整光照方向。' }),
+		]),
+		card('环境光', 'wb_sunny', [
 			rowSelect('环境类型', 'env_mode', { sky: '程序化天空', gradient: '渐变', solid: '纯色', image: 'HDR / 图片' }),
 			envBtns,
 			PTR.nodes.envName,
@@ -116,7 +191,7 @@ export function buildSidebar() {
 		]),
 		card('太阳', 'brightness_high', [
 			rowCheck('启用太阳', 'sun_enable'),
-			rowSlider('太阳高度', 'sun_elevation', -10, 90, 0.5, 1),
+			rowSlider('太阳高度', 'sun_elevation', -90, 90, 0.5, 1),
 			rowSlider('太阳方位', 'sun_azimuth', 0, 360, 1, 0),
 			rowSlider('太阳角直径', 'sun_angle', 0.25, 45, 0.05, 2),
 			rowSlider('太阳强度', 'sun_intensity', 0, 40, 0.1, 2),
@@ -136,6 +211,8 @@ export function buildSidebar() {
 			rowCheck('阴影捕捉（透明）', 'ground_catcher'),
 			rowNumber('地面高度', 'ground_y', -1000, 1000, 0.5),
 			rowColor('颜色', 'ground_color'),
+			makeGroundTextureRow(),
+			rowSlider('纹理尺寸', 'ground_texture_scale', 0.25, 64, 0.25, 2),
 			rowSlider('粗糙度', 'ground_rough', 0.02, 1, 0.01, 2),
 			rowSlider('金属度', 'ground_metal', 0, 1, 0.01, 2),
 			rowNumber('半径（0=无限）', 'ground_radius', 0, 100000, 1),
@@ -144,7 +221,12 @@ export function buildSidebar() {
 	];
 
 	PTR.nodes.matlist = el('div', { id: 'ptr_matlist' });
+	PTR.nodes.groupList = el('div', { id: 'ptr_grouplist' });
 	const materialCards = [
+		card('按组覆盖', 'account_tree', [
+			el('div', { class: 'ptr_note', text: '组级设置只影响该组及其子组中的模型；子组的设置会覆盖父组。不会修改 Blockbench 原模型材质。' }),
+			PTR.nodes.groupList,
+		]),
 		card('材质默认值', 'palette', [
 			rowSlider('默认粗糙度', 'def_roughness', 0, 1, 0.01, 2),
 			rowSlider('默认金属度', 'def_metalness', 0, 1, 0.01, 2),
@@ -194,11 +276,14 @@ export function buildSidebar() {
 		]),
 	];
 
-	return buildTabs([
-		{ title: '渲染', icon: 'speed', cards: renderCards },
-		{ title: '相机', icon: 'videocam', cards: cameraCards },
-		{ title: '环境', icon: 'wb_sunny', cards: envCards },
-		{ title: '材质', icon: 'palette', cards: materialCards },
-		{ title: '后期', icon: 'tune', cards: postCards },
+	const stages = buildStages([
+		{ id: 'camera', cards: [resolutionCard, ...cameraCards, ...materialCards] },
+		{ id: 'scene', cards: envCards },
+		{ id: 'preview', cards: [...renderCards, ...postCards] },
+		{ id: 'export', cards: buildExportPanel() },
 	]);
+	buildGroupList();
+	buildMaterialList();
+	updateExportSummary();
+	return stages;
 }

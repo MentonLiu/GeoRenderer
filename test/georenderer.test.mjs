@@ -9,7 +9,10 @@ import { build } from 'esbuild';
 import { DEFAULTS } from '../plugins/georenderer/src/core/config.js';
 import { buildBVH } from '../plugins/georenderer/src/scene/bvh.js';
 import { packAtlas } from '../plugins/georenderer/src/scene/atlas.js';
-import { buildEnvDistribution, parseHDR } from '../plugins/georenderer/src/scene/environment.js';
+import { buildEnvDistribution, generateSkyPixels, parseHDR } from '../plugins/georenderer/src/scene/environment.js';
+import { STEPS, canExport, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from '../plugins/georenderer/src/ui/workflow-state.js';
+import { groupChainForElement, materialKey, resolveMaterialOverride } from '../plugins/georenderer/src/scene/group-overrides.js';
+import { applyPreset, applyTimeOfDay, formatClock } from '../plugins/georenderer/src/scene/presets.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bundle = await readFile(path.join(root, 'plugins/georenderer/georenderer.js'), 'utf8');
@@ -71,7 +74,7 @@ test('the original reference remains unchanged', async () => {
 test('registration and unload remove Blockbench resources', () => {
   const { plugin, listeners, actions, css } = loadPlugin();
   assert.equal(plugin.id, 'georenderer');
-  assert.equal(plugin.version, '1.5.1');
+  assert.equal(plugin.version, '2.0.0');
   plugin.onload();
   assert.equal(actions.length, 1);
   assert.equal(actions[0].id, 'georenderer_open');
@@ -80,6 +83,74 @@ test('registration and unload remove Blockbench resources', () => {
   assert.equal(actions[0].deleted, true);
   assert.equal(css[0].deleted, true);
   assert.equal(listeners.size, 0);
+});
+
+test('workflow exposes four ordered steps and keeps path tracing out of setup', () => {
+  assert.deepEqual(STEPS.map(step => step.id), ['camera', 'scene', 'preview', 'export']);
+  assert.equal(stepIndex('scene'), 1);
+  assert.equal(stepIndex('missing'), -1);
+  assert.equal(isTraceStep('camera'), false);
+  assert.equal(isTraceStep('scene'), false);
+  assert.equal(isTraceStep('preview'), true);
+  assert.equal(isTraceStep('export'), true);
+});
+
+test('preview resolution is reduced until final render begins', () => {
+  const settings = { res_mode: 'custom', res_width: 1280, res_height: 720, preview_scale: 0.5, interactive_scale: 0.25 };
+  const viewport = { width: 640, height: 400 };
+  assert.deepEqual(resolveRenderSize(settings, 'preview', false, viewport, false), { width: 640, height: 360 });
+  assert.deepEqual(resolveRenderSize(settings, 'export', false, viewport, false), { width: 640, height: 360 });
+  assert.deepEqual(resolveRenderSize(settings, 'export', true, viewport, false), { width: 1280, height: 720 });
+  assert.deepEqual(resolveRenderSize(settings, 'preview', false, viewport, true), { width: 160, height: 90 });
+});
+
+test('export actions unlock only after the final sample target is reached', () => {
+  assert.equal(canExport('preview', true, 256, 256), false);
+  assert.equal(canExport('export', false, 256, 256), false);
+  assert.equal(canExport('export', true, 255, 256), false);
+  assert.equal(canExport('export', true, 256, 256), true);
+});
+
+test('final render size respects framebuffer limits', () => {
+  assert.equal(validateFinalSize(4096, 4096, 8192), null);
+  assert.match(validateFinalSize(8192, 8192, 8192), /1600 万像素/);
+  assert.match(validateFinalSize(9000, 512, 8192), /纹理上限/);
+});
+
+test('group material overrides stay distinct when groups share a texture', () => {
+  const parent = { uuid: 'outer', parent: null };
+  const child = { uuid: 'inner', parent };
+  const texture = { uuid: 'shared' };
+  const chain = groupChainForElement({ parent: child });
+  assert.deepEqual(chain, ['inner', 'outer']);
+  assert.notEqual(materialKey(texture, chain), materialKey(texture, ['outer']));
+  assert.deepEqual(resolveMaterialOverride(texture, chain,
+    { shared: { roughness: 0.7, emissive: 0 } },
+    { outer: { roughness: 0.4, metalness: 0.2 }, inner: { roughness: 0.1, emissive: 3 } }),
+  { roughness: 0.1, emissive: 3, metalness: 0.2 });
+});
+
+test('scene clock maps midday and midnight to sun direction', () => {
+  const settings = {};
+  assert.equal(applyPreset(settings, 'minecraft_overworld'), true);
+  assert.equal(settings.env_mode, 'sky');
+  applyTimeOfDay(settings, 12);
+  assert.equal(settings.sun_elevation, 70);
+  assert.equal(settings.sun_azimuth, 180);
+  assert.equal(formatClock(12.25), '12:15');
+  applyTimeOfDay(settings, 24);
+  assert.equal(settings.sun_enable, false);
+  assert.equal(formatClock(24), '24:00');
+});
+
+test('nighttime procedural sky emits less light than midday sky', () => {
+  const settings = { ...DEFAULTS };
+  applyTimeOfDay(settings, 12);
+  const noon = generateSkyPixels(settings);
+  applyTimeOfDay(settings, 0);
+  const midnight = generateSkyPixels(settings);
+  const pixel = (256 * 1024 + 512) * 4;
+  assert.ok(noon[pixel] > midnight[pixel] * 3);
 });
 
 test('Blockbench source modules have no circular or external imports', async () => {

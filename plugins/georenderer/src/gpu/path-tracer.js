@@ -6,6 +6,7 @@ import { buildBVH } from '../scene/bvh.js';
 import { buildEnvDistribution, generateSkyPixels, resampleEquirect, sunDirection } from '../scene/environment.js';
 import { collectGeometry } from '../scene/geometry.js';
 import { buildMaterials } from '../scene/materials.js';
+import { materialKey } from '../scene/group-overrides.js';
 
 export class PathTracer {
 	constructor(canvas) {
@@ -86,19 +87,14 @@ export class PathTracer {
 		return this;
 	}
 
-	buildScene(settings, overrides) {
+	buildScene(settings, overrides, groupOverrides) {
 		const gl = this.gl;
 		const t0 = performance.now();
 
 		this.disposeScene();
 
 		const geo = collectGeometry();
-		if (geo.triCount === 0) {
-			this.scene = { triCount: 0, lightCount: 0, stats: { tris: 0, textures: 0, nodes: 0, ms: 0 } };
-			return this.scene;
-		}
-
-		const mats = buildMaterials(gl, geo.texRefs, settings, overrides);
+		const mats = buildMaterials(gl, geo.texRefs, geo.groupRefs, settings, overrides, groupOverrides);
 		const bvh = buildBVH(geo.positions, geo.triCount);
 
 		const n = geo.triCount;
@@ -109,7 +105,7 @@ export class PathTracer {
 		for (let k = 0; k < n; k++) {
 			const t = bvh.order[k];
 			const tex = geo.texRefs[t];
-			const slot = tex ? (mats.slotOfUuid.get(tex.uuid) || 0) : 0;
+			const slot = mats.slotOfKey.get(materialKey(tex, geo.groupRefs[t])) || 0;
 			const isLight = mats.slotList[slot] && mats.slotList[slot].emissive ? 1 : 0;
 			if (isLight && lightList.length < 4096) lightList.push(k);
 
@@ -181,10 +177,11 @@ export class PathTracer {
 			atlasMER: mats.atlasMER,
 			atlasNormal: mats.atlasNormal,
 			atlasEmissive: mats.atlasEmissive,
+			groundRect: mats.groundRect,
 			bounds: computeBounds(geo.positions, n),
 			stats: {
 				tris: n,
-				textures: mats.matCount - 1,
+				textures: mats.textureCount,
 				nodes: bvh.nodeCount,
 				atlas: mats.atlasSize,
 				lights: lightList.length,
@@ -451,6 +448,10 @@ export class PathTracer {
 		gl.uniform1f(u.uGroundRadius, settings.ground_radius);
 		const gc = hexToLinear(settings.ground_color);
 		gl.uniform3f(u.uGroundColor, gc[0], gc[1], gc[2]);
+		const groundRect = s.groundRect;
+		gl.uniform1i(u.uGroundTexOn, groundRect ? 1 : 0);
+		gl.uniform4f(u.uGroundRect, groundRect ? groundRect.x : 0, groundRect ? groundRect.y : 0, groundRect ? groundRect.w : 1, groundRect ? groundRect.h : 1);
+		gl.uniform1f(u.uGroundTexScale, Math.max(0.01, settings.ground_texture_scale || 1));
 
 		return true;
 	}

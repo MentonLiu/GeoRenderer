@@ -17,11 +17,12 @@ export const INTERACTIVE_PASS_CAP = 8;
 export const IDLE_PASS_CAP = 64;
 
 export const DEFAULTS = {
-	res_mode: 'fit',
+	res_mode: 'custom',
 	res_width: 1280,
 	res_height: 720,
 	render_mode: 'preview',
 	preview_samples: 8,
+	preview_scale: 0.5,
 	final_samples: 256,
 	max_bounce: 6,
 	light_samples: 1,
@@ -35,12 +36,15 @@ export const DEFAULTS = {
 
 	ortho: false,
 	fov: 45,
+	camera_distance: 70,
 	aperture: 0,
 	focus_distance: 0,
 	auto_focus: true,
 	auto_sync: false,
 
 	env_mode: 'sky',
+	scene_preset: '',
+	time_of_day: 12,
 	env_intensity: 1.0,
 	env_rotation: 0,
 	bg_mode: 'env',
@@ -64,6 +68,8 @@ export const DEFAULTS = {
 	ground_on: true,
 	ground_y: 0,
 	ground_color: '#a8a8a8',
+	ground_texture_uuid: '',
+	ground_texture_scale: 1,
 	ground_rough: 0.9,
 	ground_metal: 0,
 	ground_radius: 0,

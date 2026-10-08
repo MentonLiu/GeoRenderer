@@ -1,12 +1,19 @@
 
 #ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }
 #ptr_root * { box-sizing: border-box; }
+#ptr_step_nav { display: flex; gap: 6px; padding: 9px 12px; background: var(--color-ui); border-bottom: 1px solid var(--color-border); }
+.ptr_step { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 5px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-back); color: var(--color-text); cursor: pointer; font-size: 12px; }
+.ptr_step:hover { background: var(--color-selected); }
+.ptr_step.active { border-color: var(--color-accent); color: var(--color-light); box-shadow: inset 0 -2px var(--color-accent); }
+.ptr_step_number { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: var(--color-selected); font-weight: 700; }
+.ptr_step.active .ptr_step_number { background: var(--color-accent); color: var(--color-accent_text); }
 #ptr_viewport {
 	flex: 1 1 auto; position: relative; background: #101014;
 	display: flex; align-items: center; justify-content: center; overflow: hidden;
 	min-width: 240px;
 }
-#ptr_viewport canvas {
+#ptr_frame { position: relative; flex: 0 0 auto; background: #20242b; overflow: hidden; }
+#ptr_frame canvas {
 	width: 100%; height: 100%; object-fit: contain;
 	image-rendering: auto; cursor: grab;
 	background-image: linear-gradient(45deg, #2a2a30 25%, transparent 25%),
@@ -16,6 +23,8 @@
 	background-size: 16px 16px;
 	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
 }
+#ptr_raster_canvas { position: absolute; inset: 0; }
+#ptr_canvas { position: absolute; inset: 0; }
 #ptr_viewport canvas.dragging { cursor: grabbing; }
 #ptr_overlay {
 	position: absolute; left: 8px; top: 8px; pointer-events: none;
@@ -31,6 +40,12 @@
 	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;
 	background: var(--color-ui); border-left: 1px solid var(--color-border);
 }
+.ptr_stagepanes { flex: 1 1 auto; overflow-y: auto; padding: 10px; min-width: 0; }
+.ptr_stagepane[hidden] { display: none; }
+.ptr_summary { display: grid; gap: 6px; margin: 4px 0 10px; }
+.ptr_summary_line { padding: 6px 8px; border-radius: 4px; background: var(--color-ui); font-size: 11px; line-height: 1.4; color: var(--color-text); }
+.ptr_time { display: block; padding: 2px 0 2px 104px; color: var(--color-light); font-variant-numeric: tabular-nums; }
+.ptr_btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .ptr_tabs {
 	flex: 0 0 42px; display: flex; flex-direction: column; align-items: stretch;
 	padding: 6px 0; gap: 2px; background: var(--color-back);
@@ -83,12 +98,12 @@
 }
 .ptr_note { font-size: 11px; color: var(--color-subtle_text); margin: 4px 2px 2px; line-height: 1.4; }
 #ptr_footer {
-	display: flex; align-items: center; gap: 4px; padding: 6px 8px;
+	display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px;
 	border-top: 1px solid var(--color-border); background: var(--color-ui);
 }
 #ptr_progress { flex: 1 1 auto; height: 6px; background: var(--color-back); border-radius: 3px; overflow: hidden; margin: 0 8px; }
 #ptr_progress > div { height: 100%; width: 0%; background: var(--color-accent); transition: width .1s linear; }
-#ptr_status { font-size: 11px; color: var(--color-subtle_text); white-space: nowrap; }
+#ptr_status { width: 100%; font-size: 11px; color: var(--color-subtle_text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ptr_btn {
 	background: var(--color-button); color: var(--color-text); border: 1px solid var(--color-border);
 	border-radius: 4px; padding: 4px 11px; cursor: pointer; font-size: 12px; white-space: nowrap;
