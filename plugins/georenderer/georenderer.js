@@ -4471,7 +4471,7 @@
   function showRenderDialog() {
     if (PTR.dialog) return;
     PTR.dialog = new Dialog("georenderer_dialog", {
-      title: "GeoRenderer",
+      title: "几何渲染器",
       width: 1180,
       resizable: true,
       darken: false,
@@ -4886,12 +4886,12 @@
   var eventHandler = null;
   var selectionHandler = null;
   Plugin.register(PLUGIN_ID, {
-    title: "GeoRenderer",
+    title: "几何渲染器",
     icon: "auto_awesome",
     author: "PuddingKC",
     description: "在独立五步窗口中配置材质、场景与镜头，并使用 GPU 路径追踪渲染模型",
     about: [
-      "在 **视图 → GeoRenderer** 中打开",
+      "在 **视图 → 几何渲染器** 中打开",
       "",
       "- 五步都在独立窗口中完成；前两步可检查模型，第 3 步确定最终镜头",
       "- 组大纲按名称排序；点击模型部件可定位并编辑所属组",
@@ -4914,7 +4914,7 @@
         console.warn("[PathTracer] addCSS 失败", err);
       }
       action = new Action("georenderer_open", {
-        name: "GeoRenderer",
+        name: "几何渲染器",
         description: "在独立窗口配置场景并渲染当前模型",
         icon: "auto_awesome",
         category: "view",

@@ -201,7 +201,7 @@ function syncSettingsToView() {
 function showRenderDialog() {
 	if (PTR.dialog) return;
 	PTR.dialog = new Dialog('georenderer_dialog', {
-		title: 'GeoRenderer',
+		title: '几何渲染器',
 		width: 1180,
 		resizable: true,
 		darken: false,
