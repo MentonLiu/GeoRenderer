@@ -23,6 +23,7 @@ function makeGroundTextureRow() {
 		PTR.settings.ground_texture_uuid = select.value;
 		saveSettings();
 		if (PTR.raster) PTR.raster.setGroundTexture(((typeof Texture !== 'undefined' && Texture.all) || []).find(texture => texture.uuid === select.value));
+		PTR.workspaceScene?.refresh();
 		if (PTR.tracer) rebuildScene();
 	});
 	return makeRow('地面纹理', [select]);
@@ -123,6 +124,7 @@ export function buildSidebar() {
 			PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
 			syncControls();
 			saveSettings();
+			PTR.workspaceScene?.refresh();
 			try {
 				if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, null);
 				else if (PTR.tracer) PTR.needsRebuild = true;
@@ -143,6 +145,7 @@ export function buildSidebar() {
 				}
 				syncControls();
 				saveSettings();
+				PTR.workspaceScene?.refresh();
 			} catch (err) {
 				if (request === PTR.scenePresetRequest) PTR.nodes.sceneSource.textContent = '内置贴图读取失败，已使用程序化氛围';
 			}

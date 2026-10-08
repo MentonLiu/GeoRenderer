@@ -10,10 +10,9 @@ import { DEFAULTS } from '../plugins/georenderer/src/core/config.js';
 import { buildBVH } from '../plugins/georenderer/src/scene/bvh.js';
 import { packAtlas } from '../plugins/georenderer/src/scene/atlas.js';
 import { buildEnvDistribution, generateSkyPixels, parseHDR } from '../plugins/georenderer/src/scene/environment.js';
-import { STEPS, canExport, canMoveCamera, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from '../plugins/georenderer/src/ui/workflow-state.js';
+import { STEPS, canExport, canMoveCamera, isTraceStep, isWorkspaceStep, resolveRenderSize, stepIndex, validateFinalSize } from '../plugins/georenderer/src/ui/workflow-state.js';
 import { groupChainForElement, materialKey, resolveMaterialOverride } from '../plugins/georenderer/src/scene/group-overrides.js';
 import { applyPreset, applyTimeOfDay, formatClock } from '../plugins/georenderer/src/scene/presets.js';
-import { RasterPreview } from '../plugins/georenderer/src/ui/raster-preview.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bundle = await readFile(path.join(root, 'plugins/georenderer/georenderer.js'), 'utf8');
@@ -95,28 +94,14 @@ test('workflow exposes five ordered steps and locks the camera during rendering'
   assert.equal(isTraceStep('scene'), false);
   assert.equal(isTraceStep('preview'), true);
   assert.equal(isTraceStep('export'), true);
-  assert.equal(canMoveCamera('materials'), true);
-  assert.equal(canMoveCamera('scene'), true);
+  assert.equal(canMoveCamera('materials'), false);
+  assert.equal(canMoveCamera('scene'), false);
   assert.equal(canMoveCamera('camera'), true);
   assert.equal(canMoveCamera('preview'), false);
   assert.equal(canMoveCamera('export'), false);
-});
-
-test('raster preview click resolves the nearest owning group', t => {
-  const previousThree = globalThis.THREE;
-  globalThis.THREE = { Vector2: class { constructor(x, y) { this.x = x; this.y = y; } } };
-  t.after(() => { globalThis.THREE = previousThree; });
-  const raycaster = {
-    setFromCamera(point) { assert.equal(point.x, 0); assert.equal(point.y, 0); },
-    intersectObjects() { return [{ object: { visible: true, userData: { georendererGroupChain: ['child', 'parent'] } } }]; },
-  };
-  const preview = {
-    activeCamera: { updateMatrixWorld() {} },
-    canvas: { getBoundingClientRect() { return { left: 10, top: 20, width: 100, height: 100 }; } },
-    raycaster,
-    model: { children: [{}] },
-  };
-  assert.equal(RasterPreview.prototype.pickGroup.call(preview, 60, 70), 'child');
+  assert.equal(isWorkspaceStep('materials'), true);
+  assert.equal(isWorkspaceStep('scene'), true);
+  assert.equal(isWorkspaceStep('camera'), false);
 });
 
 test('preview resolution is reduced until final render begins', () => {

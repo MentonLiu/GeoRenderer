@@ -13,6 +13,15 @@ function isGroup(node) {
 	return typeof Group !== 'undefined' && node instanceof Group;
 }
 
+export function groupUuidForElement(element, allGroups = groups()) {
+	const chain = groupChainForElement(element);
+	return chain.find(uuid => allGroups.some(group => group.uuid === uuid)) || null;
+}
+
+export function selectGroupForElement(element) {
+	selectGroup(groupUuidForElement(element));
+}
+
 export function selectGroup(uuid) {
 	const group = groups().find(item => item.uuid === uuid);
 	PTR.selectedGroupUuid = group ? group.uuid : null;

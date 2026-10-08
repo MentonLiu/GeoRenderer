@@ -3,8 +3,7 @@ import { groupChainForElement, resolveMaterialOverride } from '../scene/group-ov
 import { syncControls } from './controls.js';
 import { PTR, saveSettings } from './state.js';
 
-// A separate THREE renderer keeps the first three steps responsive without
-// allocating any path-tracing buffers or compiling the path-tracing shaders.
+// Camera setup uses a lightweight preview before path-tracing buffers exist.
 export class RasterPreview {
 	constructor(canvas) {
 		this.canvas = canvas;
@@ -26,7 +25,6 @@ export class RasterPreview {
 		this.groundDisk.rotation.x = -Math.PI / 2;
 		this.scene.add(this.groundDisk);
 		this.model = new THREE.Group();
-		this.raycaster = new THREE.Raycaster();
 		this.selectionHelper = null;
 		this.ownedMaterials = [];
 		this.scene.add(this.model);
@@ -71,18 +69,6 @@ export class RasterPreview {
 		}
 		this.model.updateMatrixWorld(true);
 		this.highlightGroup(PTR.selectedGroupUuid);
-	}
-
-	pickGroup(clientX, clientY) {
-		if (!this.activeCamera) return null;
-		const rect = this.canvas.getBoundingClientRect();
-		if (!rect.width || !rect.height) return null;
-		const x = (clientX - rect.left) / rect.width * 2 - 1;
-		const y = 1 - (clientY - rect.top) / rect.height * 2;
-		this.activeCamera.updateMatrixWorld(true);
-		this.raycaster.setFromCamera(new THREE.Vector2(x, y), this.activeCamera);
-		const hit = this.raycaster.intersectObjects(this.model.children, true).find(item => item.object.visible);
-		return hit?.object.userData.georendererGroupChain?.[0] || null;
 	}
 
 	highlightGroup(uuid) {
@@ -147,11 +133,9 @@ export class RasterPreview {
 		target.updateProjectionMatrix();
 		target.position.set(...cam.pos);
 		target.lookAt(...cam.target);
-		this.activeCamera = target;
-		const materialStep = PTR.step === 'materials';
-		this.grid.visible = materialStep;
-		this.floor.visible = !materialStep && !!settings.ground_on && !(settings.ground_radius > 0);
-		this.groundDisk.visible = !materialStep && !!settings.ground_on && settings.ground_radius > 0;
+		this.grid.visible = false;
+		this.floor.visible = !!settings.ground_on && !(settings.ground_radius > 0);
+		this.groundDisk.visible = !!settings.ground_on && settings.ground_radius > 0;
 		this.floor.position.y = settings.ground_y;
 		this.groundDisk.position.y = settings.ground_y;
 		if (this.groundDisk.visible) this.groundDisk.scale.setScalar(settings.ground_radius);
@@ -165,16 +149,16 @@ export class RasterPreview {
 			this.groundMap.repeat.set(repeat, repeat);
 		}
 		const daylight = Math.max(0.1, Math.min(1, (Math.sin((settings.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
-		this.ambient.intensity = materialStep ? 1.2 : 0.2 + daylight * Math.max(0, settings.env_intensity);
-		this.sun.visible = !materialStep && !!settings.sun_enable;
+		this.ambient.intensity = 0.2 + daylight * Math.max(0, settings.env_intensity);
+		this.sun.visible = !!settings.sun_enable;
 		const dir = sunDirection(settings);
 		this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
 		this.sun.intensity = Math.max(0, settings.sun_intensity / 4);
 		this.sun.color.set(settings.sun_color);
-		this.scene.background = !materialStep && settings.bg_mode === 'transparent' ? null
-			: !materialStep && PTR.sceneCubemap && settings.bg_mode === 'env'
+		this.scene.background = settings.bg_mode === 'transparent' ? null
+			: PTR.sceneCubemap && settings.bg_mode === 'env'
 			? PTR.sceneCubemap
-			: new THREE.Color(materialStep ? '#252b34' : settings.bg_mode === 'color' ? settings.bg_color : settings.sky_horizon).multiplyScalar(materialStep || settings.bg_mode === 'color' ? 1 : 0.12 + 0.88 * daylight);
+			: new THREE.Color(settings.bg_mode === 'color' ? settings.bg_color : settings.sky_horizon).multiplyScalar(settings.bg_mode === 'color' ? 1 : 0.12 + 0.88 * daylight);
 		this.renderer.render(this.scene, target);
 	}
 

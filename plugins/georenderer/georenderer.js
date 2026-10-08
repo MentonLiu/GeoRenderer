@@ -285,6 +285,9 @@
   };
   var PTR = {
     dialog: null,
+    panel: null,
+    workspaceScene: null,
+    cameraInitialized: false,
     tracer: null,
     cam: new OrbitCam(),
     settings: Object.assign({}, DEFAULTS),
@@ -360,7 +363,10 @@
     return id === "preview" || id === "export";
   }
   function canMoveCamera(id) {
-    return id === "materials" || id === "scene" || id === "camera";
+    return id === "camera";
+  }
+  function isWorkspaceStep(id) {
+    return id === "materials" || id === "scene";
   }
   function canExport(step, finalStarted, spp, finalSamples) {
     return step === "export" && !!finalStarted && spp >= Math.max(1, finalSamples);
@@ -2469,6 +2475,7 @@
           if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
           else if (PTR.tracer) PTR.needsRebuild = true;
           saveSettings();
+          PTR.workspaceScene?.refresh();
         } catch (err) {
           showError(err);
         }
@@ -2502,6 +2509,7 @@
             if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
             else if (PTR.tracer) PTR.needsRebuild = true;
             saveSettings();
+            PTR.workspaceScene?.refresh();
           } catch (err) {
             showError(err);
           }
@@ -2722,6 +2730,13 @@
   }
   function isGroup(node) {
     return typeof Group !== "undefined" && node instanceof Group;
+  }
+  function groupUuidForElement(element, allGroups = groups()) {
+    const chain = groupChainForElement(element);
+    return chain.find((uuid) => allGroups.some((group) => group.uuid === uuid)) || null;
+  }
+  function selectGroupForElement(element) {
+    selectGroup(groupUuidForElement(element));
   }
   function selectGroup(uuid) {
     const group = groups().find((item) => item.uuid === uuid);
@@ -3067,6 +3082,7 @@
       PTR.settings.ground_texture_uuid = select.value;
       saveSettings();
       if (PTR.raster) PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === select.value));
+      PTR.workspaceScene?.refresh();
       if (PTR.tracer) rebuildScene();
     });
     return makeRow("地面纹理", [select]);
@@ -3162,6 +3178,7 @@
         PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
         syncControls();
         saveSettings();
+        PTR.workspaceScene?.refresh();
         try {
           if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, null);
           else if (PTR.tracer) PTR.needsRebuild = true;
@@ -3184,6 +3201,7 @@
           }
           syncControls();
           saveSettings();
+          PTR.workspaceScene?.refresh();
         } catch (err) {
           if (request === PTR.scenePresetRequest) PTR.nodes.sceneSource.textContent = "内置贴图读取失败，已使用程序化氛围";
         }
@@ -3355,7 +3373,6 @@
       this.groundDisk.rotation.x = -Math.PI / 2;
       this.scene.add(this.groundDisk);
       this.model = new THREE.Group();
-      this.raycaster = new THREE.Raycaster();
       this.selectionHelper = null;
       this.ownedMaterials = [];
       this.scene.add(this.model);
@@ -3401,17 +3418,6 @@
       }
       this.model.updateMatrixWorld(true);
       this.highlightGroup(PTR.selectedGroupUuid);
-    }
-    pickGroup(clientX, clientY) {
-      if (!this.activeCamera) return null;
-      const rect = this.canvas.getBoundingClientRect();
-      if (!rect.width || !rect.height) return null;
-      const x = (clientX - rect.left) / rect.width * 2 - 1;
-      const y = 1 - (clientY - rect.top) / rect.height * 2;
-      this.activeCamera.updateMatrixWorld(true);
-      this.raycaster.setFromCamera(new THREE.Vector2(x, y), this.activeCamera);
-      const hit = this.raycaster.intersectObjects(this.model.children, true).find((item) => item.object.visible);
-      return hit?.object.userData.georendererGroupChain?.[0] || null;
     }
     highlightGroup(uuid) {
       if (this.selectionHelper) {
@@ -3474,11 +3480,9 @@
       target.updateProjectionMatrix();
       target.position.set(...cam.pos);
       target.lookAt(...cam.target);
-      this.activeCamera = target;
-      const materialStep = PTR.step === "materials";
-      this.grid.visible = materialStep;
-      this.floor.visible = !materialStep && !!settings2.ground_on && !(settings2.ground_radius > 0);
-      this.groundDisk.visible = !materialStep && !!settings2.ground_on && settings2.ground_radius > 0;
+      this.grid.visible = false;
+      this.floor.visible = !!settings2.ground_on && !(settings2.ground_radius > 0);
+      this.groundDisk.visible = !!settings2.ground_on && settings2.ground_radius > 0;
       this.floor.position.y = settings2.ground_y;
       this.groundDisk.position.y = settings2.ground_y;
       if (this.groundDisk.visible) this.groundDisk.scale.setScalar(settings2.ground_radius);
@@ -3492,13 +3496,13 @@
         this.groundMap.repeat.set(repeat, repeat);
       }
       const daylight = Math.max(0.1, Math.min(1, (Math.sin((settings2.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
-      this.ambient.intensity = materialStep ? 1.2 : 0.2 + daylight * Math.max(0, settings2.env_intensity);
-      this.sun.visible = !materialStep && !!settings2.sun_enable;
+      this.ambient.intensity = 0.2 + daylight * Math.max(0, settings2.env_intensity);
+      this.sun.visible = !!settings2.sun_enable;
       const dir = sunDirection(settings2);
       this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
       this.sun.intensity = Math.max(0, settings2.sun_intensity / 4);
       this.sun.color.set(settings2.sun_color);
-      this.scene.background = !materialStep && settings2.bg_mode === "transparent" ? null : !materialStep && PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(materialStep ? "#252b34" : settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(materialStep || settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
+      this.scene.background = settings2.bg_mode === "transparent" ? null : PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
       this.renderer.render(this.scene, target);
     }
     start() {
@@ -3529,6 +3533,176 @@
       this.renderer.dispose();
     }
   };
+
+  // plugins/georenderer/src/ui/workspace-scene.js
+  var WorkspaceScene = class {
+    constructor() {
+      this.scene = null;
+      this.ambient = new THREE.AmbientLight(16777215, 0);
+      this.sun = new THREE.DirectionalLight(16777215, 0);
+      this.ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(2e3, 2e3),
+        new THREE.MeshStandardMaterial({ color: 16777215, roughness: 0.9 })
+      );
+      this.ground.rotation.x = -Math.PI / 2;
+      this.ground.receiveShadow = true;
+      this.groundDisk = new THREE.Mesh(new THREE.CircleGeometry(1, 64), this.ground.material);
+      this.groundDisk.rotation.x = -Math.PI / 2;
+      this.groundDisk.receiveShadow = true;
+      this.groundMap = null;
+      this.groundTextureUuid = null;
+      this.environmentSource = null;
+      this.environmentTexture = null;
+      this.renderRequest = 0;
+    }
+    activate() {
+      const scene = typeof Canvas !== "undefined" && Canvas.scene;
+      if (!scene || this.scene === scene) return;
+      this.deactivate();
+      this.scene = scene;
+      this.originalBackground = scene.background;
+      this.originalEnvironment = scene.environment;
+      scene.add(this.ambient, this.sun, this.ground, this.groundDisk);
+      this.refresh();
+    }
+    refresh() {
+      if (!this.scene) return;
+      const s = PTR.settings;
+      const daylight = Math.max(0.08, Math.min(1, (Math.sin((s.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
+      const direction = sunDirection(s);
+      this.ambient.intensity = (0.2 + daylight) * Math.max(0, s.env_intensity);
+      this.sun.visible = !!s.sun_enable;
+      this.sun.intensity = Math.max(0, s.sun_intensity / 4);
+      this.sun.color.set(s.sun_color);
+      this.sun.position.set(direction[0] * 100, direction[1] * 100, direction[2] * 100);
+      this.ground.visible = !!s.ground_on && !(s.ground_radius > 0);
+      this.groundDisk.visible = !!s.ground_on && s.ground_radius > 0;
+      this.ground.position.y = s.ground_y;
+      this.groundDisk.position.y = s.ground_y;
+      if (this.groundDisk.visible) this.groundDisk.scale.setScalar(s.ground_radius);
+      this.ground.material.color.set(s.ground_color);
+      this.ground.material.roughness = s.ground_rough;
+      this.ground.material.metalness = s.ground_metal;
+      this.ground.material.transparent = !!s.ground_catcher;
+      this.ground.material.opacity = s.ground_catcher ? 0.25 : 1;
+      this.updateGroundTexture(s.ground_texture_uuid);
+      if (this.groundMap) {
+        const repeat = (s.ground_radius > 0 ? s.ground_radius * 2 : 2e3) / Math.max(0.01, s.ground_texture_scale || 1);
+        this.groundMap.repeat.set(repeat, repeat);
+      }
+      const environment = s.env_mode === "image" ? PTR.sceneCubemap || this.getEnvironmentTexture() : null;
+      this.appliedBackground = s.bg_mode === "transparent" ? null : s.bg_mode === "env" && environment ? environment : new THREE.Color(s.bg_mode === "color" ? s.bg_color : s.sky_horizon).multiplyScalar(s.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
+      this.scene.background = this.appliedBackground;
+      this.appliedEnvironment = environment || this.originalEnvironment;
+      this.scene.environment = this.appliedEnvironment;
+      this.requestRender();
+    }
+    getEnvironmentTexture() {
+      const source = PTR.customEnv;
+      if (!source?.data || !source.width || !source.height || typeof THREE.DataTexture === "undefined") return null;
+      if (source === this.environmentSource) return this.environmentTexture;
+      if (this.environmentTexture) this.environmentTexture.dispose();
+      const width = Math.min(source.width, 512);
+      const height = Math.min(source.height, 256);
+      const pixels = new Uint8Array(width * height * 4);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const sx = Math.min(source.width - 1, Math.floor(x * source.width / width));
+          const sy = Math.min(source.height - 1, Math.floor(y * source.height / height));
+          const from = (sy * source.width + sx) * 4;
+          const to = (y * width + x) * 4;
+          for (let channel = 0; channel < 3; channel++) {
+            pixels[to + channel] = Math.round(Math.pow(Math.min(1, Math.max(0, source.data[from + channel])), 1 / 2.2) * 255);
+          }
+          pixels[to + 3] = 255;
+        }
+      }
+      const texture = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat);
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      if ("colorSpace" in texture && THREE.SRGBColorSpace) texture.colorSpace = THREE.SRGBColorSpace;
+      else if (THREE.sRGBEncoding) texture.encoding = THREE.sRGBEncoding;
+      texture.needsUpdate = true;
+      this.environmentSource = source;
+      this.environmentTexture = texture;
+      return texture;
+    }
+    updateGroundTexture(uuid) {
+      if (uuid === this.groundTextureUuid) {
+        if (this.groundMap) this.groundMap.needsUpdate = true;
+        return;
+      }
+      this.groundTextureUuid = uuid;
+      if (this.groundMap) this.groundMap.dispose();
+      const texture = (typeof Texture !== "undefined" && Texture.all || []).find((item) => item.uuid === uuid);
+      const image = texture && (texture.canvas || texture.img);
+      this.groundMap = image ? new THREE.Texture(image) : null;
+      if (this.groundMap) {
+        this.groundMap.wrapS = this.groundMap.wrapT = THREE.RepeatWrapping;
+        this.groundMap.needsUpdate = true;
+      }
+      this.ground.material.map = this.groundMap;
+      this.ground.material.needsUpdate = true;
+    }
+    requestRender() {
+      if (this.renderRequest) return;
+      this.renderRequest = requestAnimationFrame(() => {
+        this.renderRequest = 0;
+        if (!this.scene) return;
+        for (const preview of typeof Preview !== "undefined" && Preview.all || []) {
+          if (preview.node?.isConnected) preview.render();
+        }
+      });
+    }
+    deactivate() {
+      if (!this.scene) return;
+      if (this.scene.background === this.appliedBackground) this.scene.background = this.originalBackground;
+      if (this.scene.environment === this.appliedEnvironment) this.scene.environment = this.originalEnvironment;
+      this.scene.remove(this.ambient, this.sun, this.ground, this.groundDisk);
+      this.scene = null;
+      cancelAnimationFrame(this.renderRequest);
+      this.renderRequest = 0;
+      for (const preview of typeof Preview !== "undefined" && Preview.all || []) {
+        if (preview.node?.isConnected) preview.render();
+      }
+    }
+    dispose() {
+      this.deactivate();
+      this.ground.geometry.dispose();
+      this.groundDisk.geometry.dispose();
+      this.ground.material.dispose();
+      if (this.groundMap) this.groundMap.dispose();
+      if (this.environmentTexture) this.environmentTexture.dispose();
+    }
+  };
+
+  // plugins/georenderer/src/ui/workspace-picker.js
+  function attachWorkspacePicker(root = document) {
+    let down = null;
+    const onDown = (event) => {
+      if (PTR.step !== "materials" || event.button !== 0 || typeof Preview === "undefined") return;
+      const preview = (Preview.all || []).find((item) => item.node?.contains(event.target));
+      down = preview ? { preview, x: event.clientX, y: event.clientY } : null;
+    };
+    const onUp = (event) => {
+      if (!down || PTR.step !== "materials" || event.button !== 0) return;
+      const click = Math.hypot(event.clientX - down.x, event.clientY - down.y) <= 4;
+      const preview = down.preview;
+      down = null;
+      if (!click || !preview.node?.contains(event.target)) return;
+      try {
+        const hit = preview.raycast(event);
+        if (hit?.element) selectGroup(groupUuidForElement(hit.element));
+      } catch (err) {
+        console.warn("[GeoRenderer] 主视图拾取失败", err);
+      }
+    };
+    root.addEventListener("pointerdown", onDown, true);
+    root.addEventListener("pointerup", onUp, true);
+    return () => {
+      root.removeEventListener("pointerdown", onDown, true);
+      root.removeEventListener("pointerup", onUp, true);
+    };
+  }
 
   // plugins/georenderer/src/ui/window.js
   function attachViewportEvents(canvas) {
@@ -3566,9 +3740,6 @@
       if (PTR.tracer) PTR.tracer.reset();
     });
     canvas.addEventListener("pointerup", (e) => {
-      if (dragging === 1 && !moved && canvas === PTR.nodes.rasterCanvas && PTR.step === "materials" && PTR.raster) {
-        selectGroup(PTR.raster.pickGroup(e.clientX, e.clientY));
-      }
       endDrag();
       try {
         canvas.releasePointerCapture(e.pointerId);
@@ -3709,8 +3880,72 @@
     PTR.cam.distance = PTR.settings.camera_distance;
     if (PTR.raster) PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
     if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
+    PTR.workspaceScene?.refresh();
     fitFrame();
     updateExportSummary();
+  }
+  function showRenderDialog() {
+    if (PTR.dialog) return;
+    PTR.nodes.wrapper.classList.remove("ptr_workspace_mode");
+    PTR.dialog = new Dialog("georenderer_dialog", {
+      title: "GeoRenderer",
+      width: 1180,
+      resizable: true,
+      darken: false,
+      cancel_on_click_outside: false,
+      buttons: [],
+      lines: [PTR.nodes.wrapper],
+      onCancel() {
+        closeWindow();
+        return false;
+      },
+      onResize() {
+        clearTimeout(PTR.interactTimer);
+        setInteracting(true);
+        PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
+      }
+    });
+    PTR.dialog.show();
+    PTR.dialog.object?.classList.add("ptr_dialog_root");
+    if (PTR.dialog.object && !PTR.dialog.object.style.height) {
+      const h = Math.round(clamp(window.innerHeight * 0.72, 420, window.innerHeight - 60));
+      PTR.dialog.object.style.height = h + "px";
+    }
+    PTR.panel.container.style.display = "none";
+    if (!PTR.frameResizeObs && typeof ResizeObserver !== "undefined") {
+      PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
+      PTR.frameResizeObs.observe(PTR.nodes.viewport);
+    }
+  }
+  function showWorkspacePanel() {
+    if (PTR.dialog) {
+      PTR.dialog.hide();
+      PTR.panel.node.appendChild(PTR.nodes.wrapper);
+      PTR.dialog.delete();
+      PTR.dialog = null;
+      PTR.panel.container.style.display = "";
+    }
+    if (PTR.frameResizeObs) {
+      PTR.frameResizeObs.disconnect();
+      PTR.frameResizeObs = null;
+    }
+    if (PTR.raster) {
+      PTR.raster.dispose();
+      PTR.raster = null;
+    }
+    PTR.nodes.wrapper.classList.add("ptr_workspace_mode");
+  }
+  function initializeCamera() {
+    if (PTR.cameraInitialized) return;
+    PTR.cam.fov = PTR.settings.fov;
+    PTR.cam.ortho = !!PTR.settings.ortho;
+    PTR.cam.distance = PTR.settings.camera_distance;
+    PTR.cameraInitialized = true;
+  }
+  function ensureRasterPreview() {
+    if (PTR.raster) return;
+    PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
+    PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
   }
   function updateExportActions() {
     const ready = canExport(PTR.step, PTR.finalStarted, PTR.tracer ? PTR.tracer.spp : 0, PTR.settings.final_samples);
@@ -3719,9 +3954,20 @@
     PTR.nodes.btnStart.textContent = ready ? "重新渲染" : PTR.finalStarted ? "渲染中…" : "开始最终渲染";
   }
   function setStep(id) {
-    if (stepIndex(id) < 0 || !PTR.dialog) return;
+    if (stepIndex(id) < 0 || !PTR.panel) return;
     const wasTrace = isTraceStep(PTR.step);
     const trace = isTraceStep(id);
+    const workspace = isWorkspaceStep(id);
+    if (!workspace) {
+      initializeCamera();
+      PTR.workspaceScene?.deactivate();
+      showRenderDialog();
+      if (id === "camera") ensureRasterPreview();
+    } else {
+      if (wasTrace && PTR.tracer) pauseRenderer();
+      if (PTR.raster) PTR.raster.stop();
+      showWorkspacePanel();
+    }
     if (trace && !wasTrace) {
       PTR.lockedCamera = PTR.cam.state();
       PTR.interacting = false;
@@ -3735,7 +3981,7 @@
       PTR.nodes.stagePanes[step.id].hidden = !active;
     }
     PTR.nodes.canvas.style.display = trace ? "block" : "none";
-    PTR.nodes.rasterCanvas.style.display = trace ? "none" : "block";
+    PTR.nodes.rasterCanvas.style.display = id === "camera" ? "block" : "none";
     PTR.nodes.overlay.style.display = trace ? "" : "none";
     PTR.nodes.watermark.style.display = trace ? "" : "none";
     PTR.nodes.footer.style.display = trace ? "flex" : "none";
@@ -3745,6 +3991,8 @@
     PTR.nodes.btnBlockbench.style.display = id === "export" ? "" : "none";
     PTR.nodes.btnPause.style.display = id === "preview" || PTR.finalStarted ? "" : "none";
     PTR.nodes.toolGroup.style.display = id === "preview" ? "flex" : "none";
+    if (id === "scene") PTR.workspaceScene?.activate();
+    else PTR.workspaceScene?.deactivate();
     if (trace) {
       if (PTR.raster) PTR.raster.stop();
       if (!PTR.tracer) {
@@ -3772,7 +4020,7 @@
     } else {
       if (wasTrace && PTR.tracer) pauseRenderer();
       PTR.finalStarted = false;
-      if (PTR.raster) PTR.raster.start();
+      if (id === "camera" && PTR.raster) PTR.raster.start();
     }
     fitFrame();
     if (trace && PTR.tracer) applyResolution();
@@ -3835,86 +4083,60 @@
     }
   }
   function openWindow() {
-    if (typeof Dialog === "undefined") return;
-    if (PTR.dialog) {
-      closeWindow();
-      try {
-        PTR.dialog.hide();
-      } catch (e) {
-      }
-      try {
-        PTR.dialog.delete();
-      } catch (e) {
-      }
-      PTR.dialog = null;
-    }
-    PTR.cam.syncFromPreview();
-    PTR.cam.fov = PTR.settings.fov;
-    PTR.cam.ortho = !!PTR.settings.ortho;
-    PTR.cam.distance = PTR.settings.camera_distance;
-    const content = buildWindow();
-    PTR.dialog = new Dialog("georenderer_dialog", {
-      title: "GeoRenderer",
-      width: 1180,
-      resizable: true,
-      darken: false,
-      cancel_on_click_outside: false,
-      buttons: [],
-      lines: [content],
-      onCancel() {
-        closeWindow();
-      },
-      onResize() {
-        clearTimeout(PTR.interactTimer);
-        setInteracting(true);
-        PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
-      }
-    });
-    PTR.dialog.show();
-    if (PTR.dialog.object && !PTR.dialog.object.style.height) {
-      const h = Math.round(clamp(window.innerHeight * 0.72, 420, window.innerHeight - 60));
-      PTR.dialog.object.style.height = h + "px";
-    }
-    setTimeout(() => {
-      try {
-        if (PTR.dialog && PTR.dialog.object) PTR.dialog.object.classList.add("ptr_dialog_root");
-        PTR.step = "materials";
-        PTR.finalStarted = false;
-        PTR.lockedCamera = null;
-        PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
-        if (typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
-        PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
-        PTR.onSettingChanged = (key) => {
-          if (key === "res_width" || key === "res_height") fitFrame();
-          if (key === "fov") PTR.cam.fov = PTR.settings.fov;
-          if (key === "ortho") PTR.cam.ortho = !!PTR.settings.ortho;
-          if (key === "camera_distance") PTR.cam.distance = PTR.settings.camera_distance;
-          if (key === "time_of_day") {
-            applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
-            if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
-            syncControls();
-          }
-          if (key === "ground_texture_uuid" && PTR.raster) PTR.raster.setGroundTexture((Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
-          updateExportSummary();
-        };
-        PTR.onRenderStatus = updateExportActions;
-        PTR.onSettingsLoaded = syncSettingsToView;
-        PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
-        PTR.frameResizeObs.observe(PTR.nodes.viewport);
-        setStep("materials");
-      } catch (err) {
-        showError(err);
-        if (PTR.nodes.overlay) {
-          PTR.nodes.overlay.textContent = "初始化失败: " + (err && err.message ? err.message : err);
+    if (typeof Panel === "undefined" || typeof Dialog === "undefined") return;
+    if (PTR.panel || PTR.dialog) closeWindow();
+    try {
+      PTR.step = "materials";
+      PTR.finalStarted = false;
+      PTR.lockedCamera = null;
+      PTR.cameraInitialized = false;
+      PTR.cam = new OrbitCam();
+      const content = buildWindow();
+      PTR.panel = new Panel("georenderer_workspace", {
+        name: "GeoRenderer",
+        icon: "auto_awesome",
+        default_position: { slot: "right_bar", height: 600 },
+        growable: true,
+        resizable: true
+      });
+      PTR.panel.node.appendChild(content);
+      PTR.panel.selectTab();
+      PTR.workspaceScene = new WorkspaceScene();
+      PTR.detachWorkspacePicker = attachWorkspacePicker();
+      if (typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
+      PTR.onSettingChanged = (key) => {
+        if (key === "res_width" || key === "res_height") fitFrame();
+        if (key === "fov") PTR.cam.fov = PTR.settings.fov;
+        if (key === "ortho") PTR.cam.ortho = !!PTR.settings.ortho;
+        if (key === "camera_distance") PTR.cam.distance = PTR.settings.camera_distance;
+        if (key === "time_of_day") {
+          applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
+          if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
+          syncControls();
         }
-      }
-    }, 60);
+        if (key === "ground_texture_uuid" && PTR.raster) PTR.raster.setGroundTexture((Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
+        PTR.workspaceScene?.refresh();
+        updateExportSummary();
+      };
+      PTR.onRenderStatus = updateExportActions;
+      PTR.onSettingsLoaded = syncSettingsToView;
+      setStep("materials");
+    } catch (err) {
+      showError(err);
+      closeWindow();
+    }
   }
   function closeWindow() {
     clearTimeout(PTR.interactTimer);
     clearTimeout(PTR.rebuildTimer);
     clearTimeout(PTR.rasterRefreshTimer);
     closeRenderer();
+    PTR.detachWorkspacePicker?.();
+    PTR.detachWorkspacePicker = null;
+    if (PTR.workspaceScene) {
+      PTR.workspaceScene.dispose();
+      PTR.workspaceScene = null;
+    }
     if (PTR.raster) {
       PTR.raster.dispose();
       PTR.raster = null;
@@ -3923,6 +4145,18 @@
       PTR.frameResizeObs.disconnect();
       PTR.frameResizeObs = null;
     }
+    if (PTR.dialog) {
+      try {
+        PTR.dialog.hide();
+        PTR.dialog.delete();
+      } catch (err) {
+      }
+      PTR.dialog = null;
+    }
+    if (PTR.panel) {
+      PTR.panel.delete();
+      PTR.panel = null;
+    }
     PTR.onSettingChanged = null;
     PTR.onRenderStatus = null;
     PTR.onSettingsLoaded = null;
@@ -3930,6 +4164,7 @@
     PTR.refreshMaterialList = null;
     PTR.refreshGroundTextures = null;
     PTR.lockedCamera = null;
+    PTR.cameraInitialized = false;
     PTR.selectedGroupUuid = null;
     PTR.controls = [];
     PTR.nodes = {};
@@ -3940,6 +4175,14 @@
 #ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }
 #ptr_root * { box-sizing: border-box; }
 #ptr_step_nav { display: flex; gap: 6px; padding: 9px 12px; background: var(--color-ui); border-bottom: 1px solid var(--color-border); }
+.ptr_workspace_mode { min-height: 360px !important; }
+.ptr_workspace_mode #ptr_step_nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; padding: 5px; }
+.ptr_workspace_mode .ptr_step { flex-direction: column; gap: 2px; padding: 5px 1px; font-size: 10px; line-height: 1.2; }
+.ptr_workspace_mode .ptr_step_number { width: 18px; height: 18px; flex-basis: 18px; }
+.ptr_workspace_mode #ptr_root { min-height: 0; }
+.ptr_workspace_mode #ptr_viewport { display: none; }
+.ptr_workspace_mode #ptr_sidebar { width: 100%; flex: 1 1 auto; border-left: 0; }
+#panel_georenderer_workspace { overflow: hidden; }
 .ptr_step { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 5px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-back); color: var(--color-text); cursor: pointer; font-size: 12px; }
 .ptr_step:hover { background: var(--color-selected); }
 .ptr_step.active { border-color: var(--color-accent); color: var(--color-light); box-shadow: inset 0 -2px var(--color-accent); }
@@ -3963,7 +4206,6 @@
 }
 #ptr_raster_canvas { position: absolute; inset: 0; }
 #ptr_canvas { position: absolute; inset: 0; }
-#ptr_frame[data-step="materials"] #ptr_raster_canvas { cursor: pointer; }
 #ptr_frame[data-step="preview"] #ptr_canvas,
 #ptr_frame[data-step="export"] #ptr_canvas { cursor: default; }
 #ptr_viewport canvas.dragging { cursor: grabbing; }
@@ -4098,7 +4340,7 @@
     about: [
       "在 **视图 → GeoRenderer** 中打开",
       "",
-      "- 左键拖拽旋转，右键/Shift+左键平移，滚轮缩放",
+      "- 第 1、2 步使用 Blockbench 主工作区；第 3 步可拖拽取景",
       "- 可载入 `.hdr` 或普通图片作为环境贴图",
       "- “阴影捕捉 + 背景透明” 可导出带投影的透明 PNG",
       "",
@@ -4119,7 +4361,7 @@
       }
       action = new Action("georenderer_open", {
         name: "GeoRenderer",
-        description: "在独立窗口中用路径追踪渲染当前模型",
+        description: "在 Blockbench 工作区配置场景并渲染当前模型",
         icon: "auto_awesome",
         category: "view",
         condition: () => typeof Project !== "undefined" && !!Project,
@@ -4137,6 +4379,7 @@
       }
       eventHandler = () => {
         if (PTR.raster) PTR.raster.refreshModel();
+        PTR.workspaceScene?.refresh();
         if (PTR.refreshGroundTextures) PTR.refreshGroundTextures();
         if (PTR.nodes.groupList) buildGroupList();
         if (PTR.nodes.matlist) buildMaterialList();
@@ -4157,7 +4400,9 @@
         Blockbench.on("undo", eventHandler);
         Blockbench.on("redo", eventHandler);
         selectionHandler = () => {
-          if (PTR.nodes.groupList && typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
+          if (!PTR.nodes.groupList) return;
+          if (typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
+          else if (typeof Outliner !== "undefined" && Outliner.selected?.[0]) selectGroupForElement(Outliner.selected[0]);
         };
         Blockbench.on("update_selection", selectionHandler);
       } catch (err) {

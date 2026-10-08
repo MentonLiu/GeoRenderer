@@ -22,6 +22,7 @@ export function loadEnvFile(file) {
 				if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
 				else if (PTR.tracer) PTR.needsRebuild = true;
 				saveSettings();
+				PTR.workspaceScene?.refresh();
 			} catch (err) { showError(err); }
 		};
 		reader.readAsArrayBuffer(file);
@@ -53,6 +54,7 @@ export function loadEnvFile(file) {
 					if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
 					else if (PTR.tracer) PTR.needsRebuild = true;
 					saveSettings();
+					PTR.workspaceScene?.refresh();
 				} catch (err) { showError(err); }
 			};
 			img.onerror = () => showError(new Error('无法解码图片'));
