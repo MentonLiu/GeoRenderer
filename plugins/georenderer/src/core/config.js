@@ -44,6 +44,7 @@ export const DEFAULTS = {
 
 	env_mode: 'sky',
 	scene_preset: '',
+	background_preset: '',
 	preview_model_overrides: {},
 	time_of_day: 12,
 	env_intensity: 1.0,

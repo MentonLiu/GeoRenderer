@@ -1,7 +1,9 @@
 import { srgbToLinear } from '../core/math.js';
 
 const convertedCubemaps = new WeakMap();
+const loadingScenes = new WeakMap();
 let selectedSceneId = '';
+let sceneSelectionRequest = 0;
 let previewModelOverrides = {};
 
 export function restoreBlockbenchPreviewModelOverrides(overrides) {
@@ -34,24 +36,30 @@ export function listBlockbenchPreviewModels() {
 			enabled: Object.hasOwn(previewModelOverrides, model.id) ? !!previewModelOverrides[model.id] : active.has(model) }));
 }
 
-function registeredScene(id) {
+export function getBlockbenchScene(id) {
 	return typeof PreviewScene !== 'undefined' ? PreviewScene.scenes?.[id] || null : null;
 }
 
 export function restoreBlockbenchSceneSelection(id) {
-	selectedSceneId = registeredScene(id)?.id || '';
+	sceneSelectionRequest++;
+	selectedSceneId = getBlockbenchScene(id)?.id || '';
 	return activeBlockbenchScene();
 }
 
-async function prepareScene(scene) {
+async function prepareScene(scene, includeModels = true) {
 	if (scene.require_minecraft_eula) {
 		if (typeof MinecraftEULA === 'undefined' || !await MinecraftEULA.promptUser('preview_scenes')) return false;
 	}
-	if (!scene.loaded && scene.lazyLoadFromWeb) {
-		try { await scene.lazyLoadFromWeb(); }
+	if (loadingScenes.has(scene)) {
+		await loadingScenes.get(scene);
+	} else if (!scene.loaded && scene.lazyLoadFromWeb) {
+		const pending = scene.lazyLoadFromWeb();
+		loadingScenes.set(scene, pending);
+		try { await pending; }
 		catch (err) { scene.loaded = false; throw err; }
+		finally { loadingScenes.delete(scene); }
 	}
-	for (const model of scene.preview_models || []) {
+	for (const model of includeModels ? scene.preview_models || [] : []) {
 		if (!model.enabled) model.update?.();
 	}
 	return true;
@@ -114,10 +122,10 @@ async function waitForCubemap(cubemap, timeout = 15000) {
 	}
 }
 
-export async function loadBlockbenchScene(id) {
-	const scene = registeredScene(id);
+export async function loadBlockbenchScene(id, { includeModels = true } = {}) {
+	const scene = getBlockbenchScene(id);
 	if (!scene) return null;
-	if (!await prepareScene(scene)) return null;
+	if (!await prepareScene(scene, includeModels)) return null;
 	if (!scene.cubemap) return { cubemap: null, environment: null };
 	const cubemap = scene.cubemap;
 	await waitForCubemap(cubemap);
@@ -150,14 +158,16 @@ export function listBlockbenchScenes() {
 }
 
 export function activeBlockbenchScene() {
-	return registeredScene(selectedSceneId);
+	return getBlockbenchScene(selectedSceneId);
 }
 
 export async function selectBlockbenchScene(id) {
+	const request = ++sceneSelectionRequest;
 	if (!id) { selectedSceneId = ''; return true; }
-	const scene = registeredScene(id);
+	const scene = getBlockbenchScene(id);
 	if (!scene) return false;
 	if (!await prepareScene(scene)) return false;
+	if (request !== sceneSelectionRequest) return false;
 	selectedSceneId = id;
 	return true;
 }

@@ -41,6 +41,7 @@
     auto_sync: false,
     env_mode: "sky",
     scene_preset: "",
+    background_preset: "",
     preview_model_overrides: {},
     time_of_day: 12,
     env_intensity: 1,
@@ -295,6 +296,8 @@
     groupOverrides: {},
     sceneCubemap: null,
     scenePresetRequest: 0,
+    backgroundPresetRequest: 0,
+    backgroundScene: null,
     customEnv: null,
     customEnvName: "",
     customEnvSource: "",
@@ -333,11 +336,15 @@
       if (raw) {
         const data = JSON.parse(raw);
         for (const k in DEFAULTS) if (data[k] !== void 0) PTR.settings[k] = data[k];
+        migrateBackgroundSelection(data);
         if (data.__overrides) PTR.overrides = data.__overrides;
         if (data.__groups) PTR.groupOverrides = data.__groups;
       }
     } catch (err) {
     }
+  }
+  function migrateBackgroundSelection(data) {
+    if (data.background_preset === void 0) PTR.settings.background_preset = data.scene_preset || "";
   }
   function saveSettings() {
     try {
@@ -1161,7 +1168,9 @@
 
   // plugins/georenderer/src/scene/blockbench-scene.js
   var convertedCubemaps = /* @__PURE__ */ new WeakMap();
+  var loadingScenes = /* @__PURE__ */ new WeakMap();
   var selectedSceneId = "";
+  var sceneSelectionRequest = 0;
   var previewModelOverrides = {};
   function restoreBlockbenchPreviewModelOverrides(overrides) {
     previewModelOverrides = overrides && typeof overrides === "object" ? { ...overrides } : {};
@@ -1188,26 +1197,33 @@
       enabled: Object.hasOwn(previewModelOverrides, model.id) ? !!previewModelOverrides[model.id] : active.has(model)
     }));
   }
-  function registeredScene(id) {
+  function getBlockbenchScene(id) {
     return typeof PreviewScene !== "undefined" ? PreviewScene.scenes?.[id] || null : null;
   }
   function restoreBlockbenchSceneSelection(id) {
-    selectedSceneId = registeredScene(id)?.id || "";
+    sceneSelectionRequest++;
+    selectedSceneId = getBlockbenchScene(id)?.id || "";
     return activeBlockbenchScene();
   }
-  async function prepareScene(scene) {
+  async function prepareScene(scene, includeModels = true) {
     if (scene.require_minecraft_eula) {
       if (typeof MinecraftEULA === "undefined" || !await MinecraftEULA.promptUser("preview_scenes")) return false;
     }
-    if (!scene.loaded && scene.lazyLoadFromWeb) {
+    if (loadingScenes.has(scene)) {
+      await loadingScenes.get(scene);
+    } else if (!scene.loaded && scene.lazyLoadFromWeb) {
+      const pending = scene.lazyLoadFromWeb();
+      loadingScenes.set(scene, pending);
       try {
-        await scene.lazyLoadFromWeb();
+        await pending;
       } catch (err) {
         scene.loaded = false;
         throw err;
+      } finally {
+        loadingScenes.delete(scene);
       }
     }
-    for (const model of scene.preview_models || []) {
+    for (const model of includeModels ? scene.preview_models || [] : []) {
       if (!model.enabled) model.update?.();
     }
     return true;
@@ -1265,10 +1281,10 @@
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
-  async function loadBlockbenchScene(id) {
-    const scene = registeredScene(id);
+  async function loadBlockbenchScene(id, { includeModels = true } = {}) {
+    const scene = getBlockbenchScene(id);
     if (!scene) return null;
-    if (!await prepareScene(scene)) return null;
+    if (!await prepareScene(scene, includeModels)) return null;
     if (!scene.cubemap) return { cubemap: null, environment: null };
     const cubemap = scene.cubemap;
     await waitForCubemap(cubemap);
@@ -1297,16 +1313,18 @@
     }));
   }
   function activeBlockbenchScene() {
-    return registeredScene(selectedSceneId);
+    return getBlockbenchScene(selectedSceneId);
   }
   async function selectBlockbenchScene(id) {
+    const request = ++sceneSelectionRequest;
     if (!id) {
       selectedSceneId = "";
       return true;
     }
-    const scene = registeredScene(id);
+    const scene = getBlockbenchScene(id);
     if (!scene) return false;
     if (!await prepareScene(scene)) return false;
+    if (request !== sceneSelectionRequest) return false;
     selectedSceneId = id;
     return true;
   }
@@ -2728,20 +2746,23 @@
 
   // plugins/georenderer/src/ui/io.js
   function loadEnvFile(file) {
-    const request = ++PTR.scenePresetRequest;
+    const request = ++PTR.backgroundPresetRequest;
     PTR.sceneCubemap = null;
+    PTR.backgroundScene = null;
     const name = file.name || "";
     const reader = new FileReader();
     reader.onerror = () => {
-      if (request === PTR.scenePresetRequest) showError(new Error("读取文件失败"));
+      if (request === PTR.backgroundPresetRequest) showError(new Error("读取文件失败"));
     };
     if (/\.hdr$/i.test(name)) {
       reader.onload = () => {
-        if (request !== PTR.scenePresetRequest) return;
+        if (request !== PTR.backgroundPresetRequest) return;
         try {
           PTR.customEnv = parseHDR(reader.result);
           PTR.customEnvName = name;
           PTR.customEnvSource = "file";
+          PTR.settings.background_preset = "";
+          PTR.refreshPreviewBackgrounds?.();
           PTR.settings.env_mode = "image";
           syncControls();
           PTR.nodes.envName.textContent = name + "  (" + PTR.customEnv.width + "×" + PTR.customEnv.height + ")";
@@ -2755,10 +2776,10 @@
       reader.readAsArrayBuffer(file);
     } else {
       reader.onload = () => {
-        if (request !== PTR.scenePresetRequest) return;
+        if (request !== PTR.backgroundPresetRequest) return;
         const img = new Image();
         img.onload = () => {
-          if (request !== PTR.scenePresetRequest) return;
+          if (request !== PTR.backgroundPresetRequest) return;
           try {
             const c = document.createElement("canvas");
             const maxW = 4096;
@@ -2778,6 +2799,8 @@
             PTR.customEnv = { width: c.width, height: c.height, data };
             PTR.customEnvName = name;
             PTR.customEnvSource = "file";
+            PTR.settings.background_preset = "";
+            PTR.refreshPreviewBackgrounds?.();
             PTR.settings.env_mode = "image";
             syncControls();
             PTR.nodes.envName.textContent = name + "  (" + c.width + "×" + c.height + ")";
@@ -2789,7 +2812,7 @@
           }
         };
         img.onerror = () => {
-          if (request === PTR.scenePresetRequest) showError(new Error("无法解码图片"));
+          if (request === PTR.backgroundPresetRequest) showError(new Error("无法解码图片"));
         };
         img.src = reader.result;
       };
@@ -3210,8 +3233,16 @@
     clearTimeout(PTR.rebuildTimer);
     const data = payload.data;
     PTR.scenePresetRequest++;
+    PTR.backgroundPresetRequest++;
     PTR.sceneCubemap = null;
     for (const k in DEFAULTS) if (data[k] !== void 0) PTR.settings[k] = data[k];
+    migrateBackgroundSelection(data);
+    if (PTR.settings.background_preset) {
+      PTR.customEnv = null;
+      PTR.customEnvName = "";
+      PTR.customEnvSource = "";
+    }
+    PTR.backgroundScene = null;
     PTR.settings.render_mode = "preview";
     PTR.finalStarted = false;
     if (PTR.settings.env_mode === "image" && !PTR.customEnv) {
@@ -3258,7 +3289,9 @@
     PTR.settings.render_mode = "preview";
     PTR.finalStarted = false;
     PTR.scenePresetRequest++;
+    PTR.backgroundPresetRequest++;
     PTR.sceneCubemap = null;
+    PTR.backgroundScene = null;
     PTR.customEnv = null;
     PTR.customEnvName = "";
     PTR.customEnvSource = "";
@@ -3279,6 +3312,12 @@
   }
 
   // plugins/georenderer/src/scene/presets.js
+  var SCENE_PRESETS = {
+    studio: { label: "工作室", env_mode: "gradient", grad_top: "#dce2e8", grad_bottom: "#30343b", sky_horizon: "#bec8d2", ground_color: "#aab0b6", sun_color: "#ffffff", sun_intensity: 5, env_intensity: 1.2 },
+    minecraft_overworld: { label: "主世界", env_mode: "sky", sky_zenith: "#4f8bd7", sky_horizon: "#c5e2fc", sky_ground: "#64765b", ground_color: "#6c8b55", sun_color: "#fff4cf", sun_intensity: 6, env_intensity: 1 },
+    minecraft_end: { label: "末地", env_mode: "gradient", grad_top: "#19132c", grad_bottom: "#55456b", sky_horizon: "#60517a", ground_color: "#c9c5a2", sun_color: "#bba7ff", sun_intensity: 1.2, env_intensity: 0.6 },
+    minecraft_nether: { label: "下界", env_mode: "gradient", grad_top: "#2d0b0b", grad_bottom: "#8a3020", sky_horizon: "#8a3020", ground_color: "#59332d", sun_color: "#ff7b38", sun_intensity: 2.5, env_intensity: 0.8 }
+  };
   function applyTimeOfDay(settings2, hour) {
     const time = clamp(Number(hour) || 0, 0, 24);
     settings2.time_of_day = time;
@@ -3312,13 +3351,14 @@
     const size = s.res_mode === "custom" ? `${s.res_width} × ${s.res_height}` : "适应预览窗口";
     const groups2 = Object.keys(PTR.groupOverrides).length;
     const scene = listBlockbenchScenes().find((item) => item.id === s.scene_preset)?.name || "无";
+    const background = listBlockbenchScenes().find((item) => item.id === s.background_preset)?.name || "GeoRenderer 环境";
     const effects = [s.denoise && "降噪", s.bloom_enable && "泛光", s.vignette_enable && "暗角", s.sharpen_enable && "锐化", s.grain_enable && "颗粒"].filter(Boolean).join("、") || "无";
     const groundTexture = (typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === s.ground_texture_uuid);
     const lines = [
       `画面：${size}，${s.final_samples} spp`,
       `镜头：${s.ortho ? "正交" : `FOV ${s.fov}°`}，光圈 ${s.aperture}，${s.auto_focus ? "自动对焦" : `焦距 ${s.focus_distance}`}`,
       `材质：${groups2} 个组覆盖，默认粗糙度 ${s.def_roughness} / 金属度 ${s.def_metalness}`,
-      `Blockbench 预览场景：${scene}；追踪环境：${s.env_mode === "image" && PTR.customEnv ? PTR.customEnvSource === "scene" ? "场景立方体贴图" : "自定义 HDR / 图片" : "GeoRenderer 环境"}，${formatClock(s.time_of_day)}`,
+      `场景（地面）：${scene}；背景环境：${s.env_mode === "image" && PTR.customEnv ? PTR.customEnvSource === "scene" ? background : PTR.customEnvName || "自定义 HDR / 图片" : "GeoRenderer 环境"}，${formatClock(s.time_of_day)}`,
       `场景几何：${PTR.tracer?.scene?.previewTriCount || 0} 个三角形（含启用的预览模型）`,
       `追踪地面：${PTR.tracer?.scene?.sceneTriCount ? "使用场景几何" : s.ground_on ? "开启" : "关闭"}${!PTR.tracer?.scene?.sceneTriCount && groundTexture ? "（" + groundTexture.name + "）" : ""}`,
       `追踪：${s.max_bounce} 次反弹，${s.light_samples} 次光源采样`,
@@ -3349,48 +3389,63 @@
   async function syncBlockbenchScene() {
     const request = ++PTR.scenePresetRequest;
     const scene = activeBlockbenchScene();
+    PTR.refreshPreviewScenes?.();
+    if (PTR.nodes.sceneSource) PTR.nodes.sceneSource.textContent = scene ? `正在读取「${scene.name}」的场景模型…` : "未选择 Blockbench 场景模型";
+    if (scene && !await selectBlockbenchScene(scene.id)) {
+      if (request === PTR.scenePresetRequest && PTR.nodes.sceneSource) PTR.nodes.sceneSource.textContent = "场景模型未能加载，请检查场景资源或 Minecraft EULA 状态";
+      return;
+    }
+    if (request !== PTR.scenePresetRequest) return;
+    PTR.settings.scene_preset = scene?.id || "";
+    PTR.refreshPreviewModels?.();
+    if (PTR.nodes.sceneSource) PTR.nodes.sceneSource.textContent = scene ? `使用「${scene.name}」的 ${scene.preview_models?.length || 0} 个 3D 场景模型` : "未选择 Blockbench 场景模型";
+    if (PTR.tracer) rebuildScene();
+    updateExportSummary();
+    saveSettings();
+  }
+  async function syncBlockbenchBackground() {
+    const request = ++PTR.backgroundPresetRequest;
+    const scene = getBlockbenchScene(PTR.settings.background_preset);
     const previousEnv = PTR.customEnv;
     const previousMode = PTR.settings.env_mode;
-    PTR.settings.scene_preset = scene?.id || "";
-    PTR.refreshPreviewScenes?.();
-    PTR.refreshPreviewModels?.();
-    if (PTR.nodes.sceneSource) PTR.nodes.sceneSource.textContent = scene ? `已选 Blockbench「${scene.name}」，正在读取环境贴图…` : "未选择 Blockbench 预览场景";
+    PTR.refreshPreviewBackgrounds?.();
+    if (PTR.nodes.backgroundSource) PTR.nodes.backgroundSource.textContent = scene ? `正在读取「${scene.name}」的背景…` : "使用下方设置的 GeoRenderer 环境或自定义图片";
     try {
-      const loaded = scene && PTR.customEnvSource !== "file" ? await loadBlockbenchScene(scene.id) : null;
-      if (request !== PTR.scenePresetRequest) return;
-      PTR.refreshPreviewModels?.();
+      const loaded = scene && PTR.customEnvSource !== "file" ? await loadBlockbenchScene(scene.id, { includeModels: false }) : null;
+      if (request !== PTR.backgroundPresetRequest) return;
+      if (scene && PTR.customEnvSource !== "file" && !loaded) throw new Error("背景未能加载，请检查 Minecraft EULA 状态");
+      if (loaded && !loaded.environment && scene.id === "studio") {
+        loaded.environment = { width: 512, height: 256, data: generateSkyPixels({ ...PTR.settings, ...SCENE_PRESETS.studio, sun_enable: false }, 512, 256) };
+      }
+      PTR.backgroundScene = loaded ? scene : null;
+      PTR.sceneCubemap = loaded?.cubemap || null;
       if (loaded?.environment) {
-        PTR.sceneCubemap = loaded.cubemap;
         PTR.customEnv = loaded.environment;
         PTR.customEnvName = scene.name;
         PTR.customEnvSource = "scene";
         PTR.settings.env_mode = "image";
       } else if (PTR.customEnvSource !== "file" && (PTR.customEnv || PTR.settings.env_mode === "image")) {
-        PTR.sceneCubemap = null;
         PTR.customEnv = null;
         PTR.customEnvName = "";
         PTR.customEnvSource = "";
         PTR.settings.env_mode = "sky";
       }
-      if (PTR.nodes.sceneSource) {
-        const features = [];
-        if (scene?.preview_models?.length) features.push(`${scene.preview_models.length} 个 3D 场景模型`);
-        if (scene?.cubemap) features.push("天空盒");
-        if (loaded?.environment) features.push("立方体贴图环境光");
-        PTR.nodes.sceneSource.textContent = scene ? `使用 Blockbench「${scene.name}」的 ${features.length ? features.join("、") : "预览配置"}` : "未选择 Blockbench 预览场景";
+      if (PTR.nodes.backgroundSource) {
+        PTR.nodes.backgroundSource.textContent = loaded?.environment ? `使用「${scene.name}」的${loaded.cubemap ? "天空盒" : "渐变背景"}，用于背景、环境光和反射` : scene ? `「${scene.name}」未提供背景贴图，使用 GeoRenderer 环境` : "使用下方设置的 GeoRenderer 环境或自定义图片";
       }
     } catch (err) {
-      if (request !== PTR.scenePresetRequest) return;
+      if (request !== PTR.backgroundPresetRequest) return;
+      PTR.backgroundScene = null;
+      PTR.sceneCubemap = null;
       if (PTR.customEnvSource !== "file" && (PTR.customEnv || PTR.settings.env_mode === "image")) {
-        PTR.sceneCubemap = null;
         PTR.customEnv = null;
         PTR.customEnvName = "";
         PTR.customEnvSource = "";
         PTR.settings.env_mode = "sky";
       }
-      if (PTR.nodes.sceneSource) PTR.nodes.sceneSource.textContent = `Blockbench「${scene.name}」已用于预览，立方体贴图无法用于路径追踪：${err.message}`;
+      if (PTR.nodes.backgroundSource) PTR.nodes.backgroundSource.textContent = `「${scene?.name || "所选背景"}」加载失败：${err.message}`;
     }
-    if (PTR.nodes.envName) PTR.nodes.envName.textContent = PTR.customEnv ? `${PTR.customEnvName}（${PTR.customEnvSource === "scene" ? "场景立方体贴图" : "自定义文件"}）` : "(未载入)";
+    if (PTR.nodes.envName) PTR.nodes.envName.textContent = PTR.customEnv ? `${PTR.customEnvName}（${PTR.customEnvSource === "scene" ? "背景预设" : "自定义文件"}）` : "(未载入)";
     syncControls();
     try {
       if (previousEnv !== PTR.customEnv || previousMode !== PTR.settings.env_mode) {
@@ -3400,7 +3455,6 @@
     } catch (err) {
       showError(err);
     }
-    if (PTR.tracer) rebuildScene();
     updateExportSummary();
     saveSettings();
   }
@@ -3480,7 +3534,7 @@
         rowNumber("对焦距离", "focus_distance", 0, 1e4, 0.5)
       ])
     ];
-    const sceneSelect = el("select");
+    const sceneSelect = el("select", { "aria-label": "场景（地面）" });
     PTR.refreshPreviewScenes = () => {
       const active = activeBlockbenchScene();
       sceneSelect.replaceChildren(el("option", { value: "", text: "无预览场景" }));
@@ -3490,6 +3544,28 @@
       sceneSelect.value = active?.id || "";
     };
     PTR.refreshPreviewScenes();
+    const backgroundSelect = el("select", { "aria-label": "背景预设" });
+    PTR.refreshPreviewBackgrounds = () => {
+      backgroundSelect.replaceChildren(el("option", { value: "", text: "GeoRenderer 环境 / 自定义图片" }));
+      for (const scene of listBlockbenchScenes()) {
+        backgroundSelect.appendChild(el("option", { value: scene.id, text: scene.name }));
+      }
+      backgroundSelect.value = PTR.settings.background_preset || "";
+    };
+    PTR.refreshPreviewBackgrounds();
+    backgroundSelect.addEventListener("change", async () => {
+      backgroundSelect.disabled = true;
+      PTR.settings.background_preset = backgroundSelect.value;
+      PTR.customEnvSource = "";
+      try {
+        await syncBlockbenchBackground();
+      } catch (err) {
+        showError(err);
+      } finally {
+        backgroundSelect.disabled = false;
+        if (PTR.dialog?.object?.isConnected) PTR.dialog.focus();
+      }
+    });
     const previewModelList = el("div", { class: "ptr_preview_model_list" });
     PTR.refreshPreviewModels = () => {
       previewModelList.replaceChildren();
@@ -3518,7 +3594,6 @@
           PTR.refreshPreviewScenes();
           return;
         }
-        PTR.customEnvSource = "";
         await syncBlockbenchScene();
       } catch (err) {
         showError(err);
@@ -3529,8 +3604,14 @@
       }
     });
     const refreshScenes = el("button", { class: "ptr_btn", text: "刷新场景列表" });
-    refreshScenes.addEventListener("click", () => syncBlockbenchScene().catch(showError));
-    PTR.nodes.sceneSource = el("div", { class: "ptr_note", text: "读取 Blockbench 当前预览场景…" });
+    refreshScenes.addEventListener("click", () => {
+      PTR.refreshPreviewScenes();
+      PTR.refreshPreviewBackgrounds();
+      syncBlockbenchScene().catch(showError);
+      syncBlockbenchBackground().catch(showError);
+    });
+    PTR.nodes.sceneSource = el("div", { class: "ptr_note", text: "读取场景模型…" });
+    PTR.nodes.backgroundSource = el("div", { class: "ptr_note", text: "读取背景预设…" });
     PTR.nodes.timeDisplay = el("strong", { class: "ptr_time", text: formatClock(PTR.settings.time_of_day) });
     const envFile = el("input", { type: "file", accept: ".hdr,.png,.jpg,.jpeg,.webp", style: { display: "none" } });
     envFile.addEventListener("change", () => {
@@ -3543,11 +3624,15 @@
     btnLoad.addEventListener("click", () => envFile.click());
     const btnClear = el("button", { class: "ptr_btn", text: "清除" });
     btnClear.addEventListener("click", () => {
-      PTR.scenePresetRequest++;
+      PTR.backgroundPresetRequest++;
       PTR.customEnv = null;
       PTR.customEnvName = "";
       PTR.customEnvSource = "";
       PTR.sceneCubemap = null;
+      PTR.backgroundScene = null;
+      PTR.settings.background_preset = "";
+      PTR.refreshPreviewBackgrounds();
+      PTR.nodes.backgroundSource.textContent = "使用下方设置的 GeoRenderer 环境或自定义图片";
       PTR.nodes.envName.textContent = "(未载入)";
       if (PTR.settings.env_mode === "image") {
         PTR.settings.env_mode = "sky";
@@ -3559,32 +3644,38 @@
       } catch (err) {
         showError(err);
       }
+      updateExportSummary();
+      saveSettings();
     });
     envBtns.appendChild(btnLoad);
     envBtns.appendChild(btnClear);
     PTR.nodes.envName = el("span", { class: "ptr_note", text: "(未载入)" });
     const envCards = [
-      card("场景与时间", "public", [
-        makeRow("Blockbench 预览场景", [sceneSelect]),
+      card("场景与背景", "public", [
+        makeRow("场景（地面）", [sceneSelect]),
+        makeRow("背景预设", [backgroundSelect]),
         refreshScenes,
         PTR.nodes.sceneSource,
-        el("div", { class: "ptr_note", text: "场景选择只应用于 GeoRenderer，不会切换 Blockbench 主视图。" }),
-        el("div", { class: "ptr_note", text: "第 3～5 步沿用这里的场景模型和参照物；第 4、5 步还会追踪其几何、纹理与场景立方体贴图。有场景几何时自动隐藏额外的 GeoRenderer 地面。" }),
+        PTR.nodes.backgroundSource,
+        el("div", { class: "ptr_note", text: "场景与背景独立选择，例如“平原地面 + 工作室背景”或“平原地面 + 下界背景”。这些设置只应用于 GeoRenderer。" }),
+        el("div", { class: "ptr_note", text: "第 3～5 步沿用此组合；第 4、5 步追踪所选场景的几何与纹理，并使用所选背景的环境光。有场景几何时自动隐藏额外的 GeoRenderer 地面。" })
+      ]),
+      card("时间", "schedule", [
         rowSlider("当前时间", "time_of_day", 0, 24, 0.25, 2),
         PTR.nodes.timeDisplay,
-        el("div", { class: "ptr_note", text: "时间会联动 GeoRenderer 的太阳光；Blockbench 场景贴图保持原样。" })
+        el("div", { class: "ptr_note", text: "时间会联动 GeoRenderer 的太阳光；背景预设的贴图保持原样。" })
       ]),
       card("独立参照模型", "accessibility_new", [
         previewModelList,
         el("div", { class: "ptr_note", text: "这些开关只影响 GeoRenderer 预览和渲染，不改变 Blockbench 主视图。" })
       ]),
       card("环境光", "wb_sunny", [
-        rowSelect("环境类型", "env_mode", { sky: "程序化天空", gradient: "渐变", solid: "纯色", image: "HDR / 图片" }),
+        rowSelect("环境类型", "env_mode", { sky: "程序化天空", gradient: "渐变", solid: "纯色", image: "背景预设 / HDR / 图片" }),
         envBtns,
         PTR.nodes.envName,
         rowSlider("环境强度", "env_intensity", 0, 20, 0.05, 2),
         rowSlider("环境旋转", "env_rotation", -180, 180, 1, 0),
-        rowSelect("背景", "bg_mode", { env: "显示环境", color: "纯色", transparent: "透明" }),
+        rowSelect("背景显示", "bg_mode", { env: "显示环境", color: "纯色", transparent: "透明" }),
         rowColor("背景颜色", "bg_color")
       ]),
       card("太阳", "brightness_high", [
@@ -3832,12 +3923,22 @@
 
   // plugins/georenderer/src/ui/raster-environment.js
   var ENV_KEYS = ["env_mode", "env_rotation", "time_of_day", "sky_zenith", "sky_horizon", "sky_ground", "sky_haze", "grad_top", "grad_bottom", "solid_color", "sun_enable", "sun_elevation", "sun_azimuth", "sun_angle", "sun_intensity", "sun_color"];
+  function rotatePixels(data, width, height, rotation) {
+    const rotated = new Float32Array(data.length);
+    const shift = Math.round((rotation || 0) / 360 * width);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const sx = ((x + shift) % width + width) % width;
+      rotated.set(data.subarray((y * width + sx) * 4, (y * width + sx) * 4 + 4), (y * width + x) * 4);
+    }
+    return rotated;
+  }
   var RasterEnvironment = class {
     constructor(renderer) {
       this.pmrem = new THREE.PMREMGenerator(renderer);
       this.target = null;
       this.key = "";
       this.source = null;
+      this.background = null;
     }
     sync(settings2, customEnv) {
       const source = settings2.env_mode === "image" ? customEnv : null;
@@ -3845,12 +3946,7 @@
       if (this.target && this.key === key && this.source === source) return this.target.texture;
       const w = 256, h = 128;
       const data = source ? resampleEquirect(source, w, h) : generateSkyPixels(settings2, w, h);
-      const rotated = new Float32Array(data.length);
-      const shift = Math.round((settings2.env_rotation || 0) / 360 * w);
-      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        const sx = ((x + shift) % w + w) % w;
-        rotated.set(data.subarray((y * w + sx) * 4, (y * w + sx) * 4 + 4), (y * w + x) * 4);
-      }
+      const rotated = rotatePixels(data, w, h, settings2.env_rotation);
       const texture = new THREE.DataTexture(rotated, w, h, THREE.RGBAFormat, THREE.FloatType);
       texture.mapping = THREE.EquirectangularReflectionMapping;
       texture.flipY = true;
@@ -3862,6 +3958,16 @@
         texture.dispose();
       }
       this.target?.dispose();
+      this.background?.dispose();
+      const bgWidth = source ? Math.min(2048, source.width) : w;
+      const bgHeight = source ? Math.max(1, Math.round(bgWidth * source.height / source.width)) : h;
+      const bgData = source ? rotatePixels(resampleEquirect(source, bgWidth, bgHeight), bgWidth, bgHeight, settings2.env_rotation) : rotated;
+      this.background = new THREE.DataTexture(bgData, bgWidth, bgHeight, THREE.RGBAFormat, THREE.FloatType);
+      this.background.mapping = THREE.EquirectangularReflectionMapping;
+      this.background.magFilter = THREE.LinearFilter;
+      this.background.minFilter = THREE.LinearFilter;
+      this.background.flipY = true;
+      this.background.needsUpdate = true;
       this.target = target;
       this.key = key;
       this.source = source;
@@ -3869,6 +3975,7 @@
     }
     dispose() {
       this.target?.dispose();
+      this.background?.dispose();
       this.pmrem.dispose();
     }
   };
@@ -4038,6 +4145,7 @@
       }
       const inspection = PTR.step === "materials" || PTR.step === "scene";
       const blockbenchScene = PTR.step === "materials" ? null : activeBlockbenchScene();
+      const backgroundScene = PTR.step !== "materials" && settings2.env_mode === "image" && PTR.customEnvSource === "scene" ? PTR.backgroundScene : null;
       const cam = (inspection ? PTR.inspectionCam : PTR.cam).state();
       if (PTR.step === "scene" && blockbenchScene?.fov && !cam.ortho) cam.fov = blockbenchScene.fov;
       const target = cam.ortho ? this.orthoCamera : this.camera;
@@ -4077,15 +4185,15 @@
       }
       const daylight = Math.max(0.1, Math.min(1, (Math.sin((settings2.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
       this.ambient.intensity = 0.2 + daylight * Math.max(0, settings2.env_intensity);
-      this.ambient.color.copy(blockbenchScene?.light_color || new THREE.Color(16777215));
+      this.ambient.color.copy(backgroundScene?.light_color || new THREE.Color(16777215));
       this.sun.visible = !!settings2.sun_enable;
       const dir = sunDirection(settings2);
       this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
       this.sun.intensity = Math.max(0, settings2.sun_intensity / 4);
       this.sun.color.set(settings2.sun_color);
-      this.scene.fog = blockbenchScene?.fog || null;
+      this.scene.fog = backgroundScene?.fog || null;
       this.scene.environment = this.environment.sync(settings2, PTR.customEnv);
-      this.scene.background = this.grid.visible ? new THREE.Color("#20242b") : settings2.bg_mode === "transparent" ? null : blockbenchScene?.cubemap && settings2.bg_mode === "env" ? blockbenchScene.cubemap : new THREE.Color(settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
+      this.scene.background = this.grid.visible ? new THREE.Color("#20242b") : settings2.bg_mode === "transparent" ? null : settings2.bg_mode === "color" ? new THREE.Color(settings2.bg_color) : this.environment.background;
       this.renderer.render(this.scene, target);
     }
     start() {
@@ -4314,6 +4422,7 @@
     restoreBlockbenchSceneSelection(PTR.settings.scene_preset);
     restoreBlockbenchPreviewModelOverrides(PTR.settings.preview_model_overrides);
     syncBlockbenchScene().catch(showError);
+    syncBlockbenchBackground().catch(showError);
     PTR.cam.fov = PTR.settings.fov;
     PTR.cam.ortho = !!PTR.settings.ortho;
     PTR.cam.distance = PTR.settings.camera_distance;
@@ -4506,6 +4615,7 @@
       showRenderDialog();
       ensureRasterPreview();
       syncBlockbenchScene().catch(showError);
+      syncBlockbenchBackground().catch(showError);
       if (!PTR.inspectionCam.syncFromPreview()) {
         const bounds = new THREE.Box3().setFromObject(PTR.raster.model);
         if (!bounds.isEmpty()) {
@@ -4538,6 +4648,7 @@
   }
   function closeWindow() {
     PTR.scenePresetRequest++;
+    PTR.backgroundPresetRequest++;
     clearTimeout(PTR.interactTimer);
     clearTimeout(PTR.rebuildTimer);
     clearTimeout(PTR.rasterRefreshTimer);
@@ -4565,6 +4676,7 @@
     PTR.refreshMaterialList = null;
     PTR.refreshGroundTextures = null;
     PTR.refreshPreviewScenes = null;
+    PTR.refreshPreviewBackgrounds = null;
     PTR.refreshPreviewModels = null;
     PTR.lockedCamera = null;
     PTR.cameraInitialized = false;
