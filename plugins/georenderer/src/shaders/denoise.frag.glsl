@@ -57,6 +57,12 @@ void main() {
 	vec3 cp = loadColor(px, size);
 	float varP = loadVariance(px, size);
 	float depthP = loadDepth(px, size);
+	// Preserve background texture detail instead of smoothing it with the model denoiser.
+	if (depthP >= 999999.0) {
+		fragColor = vec4(cp, 1.0);
+		outVariance = varP;
+		return;
+	}
 	vec3 np = texelFetch(uNormalTex, px, 0).xyz;
 	float nl = length(np);
 	np = nl > 1e-6 ? np / nl : vec3(0.0, 1.0, 0.0);

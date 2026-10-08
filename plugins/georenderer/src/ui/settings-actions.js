@@ -1,7 +1,7 @@
 import { DEFAULTS } from '../core/config.js';
 import { syncControls } from './controls.js';
 import { applyResolution, rebuildScene, showError } from './render-loop.js';
-import { PTR, saveSettings } from './state.js';
+import { PTR, migrateBackgroundSelection, saveSettings } from './state.js';
 
 export function exportSettingsToClipboard() {
 	try {
@@ -27,8 +27,16 @@ function applyImportedSettings(payload) {
 	clearTimeout(PTR.rebuildTimer);
 	const data = payload.data;
 	PTR.scenePresetRequest++;
+	PTR.backgroundPresetRequest++;
 	PTR.sceneCubemap = null;
 	for (const k in DEFAULTS) if (data[k] !== undefined) PTR.settings[k] = data[k];
+	migrateBackgroundSelection(data);
+	if (PTR.settings.background_preset) {
+		PTR.customEnv = null;
+		PTR.customEnvName = '';
+		PTR.customEnvSource = '';
+	}
+	PTR.backgroundScene = null;
 	PTR.settings.render_mode = 'preview';
 	PTR.finalStarted = false;
 	if (PTR.settings.env_mode === 'image' && !PTR.customEnv) {
@@ -69,7 +77,9 @@ export function resetToDefaults() {
 	PTR.settings.render_mode = 'preview';
 	PTR.finalStarted = false;
 	PTR.scenePresetRequest++;
+	PTR.backgroundPresetRequest++;
 	PTR.sceneCubemap = null;
+	PTR.backgroundScene = null;
 	PTR.customEnv = null;
 	PTR.customEnvName = '';
 	PTR.customEnvSource = '';

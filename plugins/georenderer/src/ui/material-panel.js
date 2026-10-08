@@ -2,7 +2,7 @@ import { clamp } from '../core/math.js';
 import { makeRow } from './controls.js';
 import { el } from './dom.js';
 import { rebuildScene } from './render-loop.js';
-import { PTR, saveSettings } from './state.js';
+import { PTR, refreshRasterMaterials, saveSettings } from './state.js';
 
 export function buildMaterialList() {
 	const host = PTR.nodes.matlist;
@@ -50,6 +50,7 @@ export function buildMaterialList() {
 				if (src !== 'r') range.value = v;
 				if (src !== 'n') num.value = v;
 				saveSettings();
+				refreshRasterMaterials();
 				clearTimeout(PTR.rebuildTimer);
 				PTR.rebuildTimer = setTimeout(() => rebuildScene(), 250);
 			};
@@ -88,6 +89,7 @@ export function buildMaterialList() {
 			else delete ov.emissive_map;
 			emisColorSel.disabled = !ov.emissive_map;
 			saveSettings();
+			refreshRasterMaterials();
 			clearTimeout(PTR.rebuildTimer);
 			PTR.rebuildTimer = setTimeout(() => rebuildScene(), 120);
 		});
@@ -95,12 +97,14 @@ export function buildMaterialList() {
 			ov.emissive_color_source = emisColorSel.value;
 			emisColorRow.style.display = emisColorSel.value === 'custom' ? '' : 'none';
 			saveSettings();
+			refreshRasterMaterials();
 			clearTimeout(PTR.rebuildTimer);
 			PTR.rebuildTimer = setTimeout(() => rebuildScene(), 120);
 		});
 		emisColorPicker.addEventListener('input', () => {
 			ov.emissive_color = emisColorPicker.value;
 			saveSettings();
+			refreshRasterMaterials();
 			clearTimeout(PTR.rebuildTimer);
 			PTR.rebuildTimer = setTimeout(() => rebuildScene(), 120);
 		});
@@ -120,6 +124,7 @@ export function buildMaterialList() {
 			if (amodeSel.value) ov.alpha_mode = amodeSel.value;
 			else delete ov.alpha_mode;
 			saveSettings();
+			refreshRasterMaterials();
 			clearTimeout(PTR.rebuildTimer);
 			PTR.rebuildTimer = setTimeout(() => rebuildScene(), 120);
 		});
@@ -129,6 +134,7 @@ export function buildMaterialList() {
 		reset.addEventListener('click', () => {
 			delete PTR.overrides[tex.uuid];
 			saveSettings();
+			refreshRasterMaterials();
 			buildMaterialList();
 			rebuildScene();
 		});

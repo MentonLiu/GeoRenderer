@@ -3,7 +3,7 @@ import { groupChainForElement, resolveMaterialOverride } from '../scene/group-ov
 import { el } from './dom.js';
 import { makeRow } from './controls.js';
 import { rebuildScene } from './render-loop.js';
-import { PTR, saveSettings } from './state.js';
+import { PTR, refreshRasterMaterials, saveSettings } from './state.js';
 
 function groups() {
 	return (typeof Group !== 'undefined' && Group.all) || [];
@@ -50,8 +50,7 @@ function changed(group, reset) {
 	const row = PTR.nodes.groupList?.querySelector(`[data-group-uuid="${group.uuid}"]`);
 	if (row) row.classList.add('modified');
 	saveSettings();
-	clearTimeout(PTR.rasterRefreshTimer);
-	if (PTR.raster) PTR.rasterRefreshTimer = setTimeout(() => PTR.raster?.refreshModel(), 60);
+	refreshRasterMaterials();
 	if (PTR.tracer) {
 		clearTimeout(PTR.rebuildTimer);
 		PTR.rebuildTimer = setTimeout(rebuildScene, 180);
@@ -100,12 +99,29 @@ function buildInspector(group) {
 	panel.appendChild(numberRow('金属度', 'metalness', 0, 1, 0.01, PTR.settings.def_metalness, group, reset));
 	panel.appendChild(numberRow('自发光强度', 'emissive', 0, 20, 0.1, 0, group, reset));
 	const effective = resolveMaterialOverride(null, groupChainForElement({ parent: group }), null, PTR.groupOverrides);
+	const source = el('select');
+	for (const [value, label] of [['', '继承纹理 / 父组'], ['main', '使用表面颜色'], ['custom', '使用指定颜色'], ['map', '使用发光贴图颜色']]) {
+		source.appendChild(el('option', { value, text: label }));
+	}
+	source.value = effective.emissive_color_source || '';
+	source.addEventListener('change', () => {
+		const override = PTR.groupOverrides[group.uuid] ||= {};
+		if (source.value) override.emissive_color_source = source.value;
+		else delete override.emissive_color_source;
+		changed(group, reset);
+		buildGroupList();
+	});
+	panel.appendChild(makeRow('发光颜色来源', [source]));
 	const color = el('input', { type: 'color', value: effective.emissive_color || '#ffffff' });
 	color.addEventListener('input', () => {
-		(PTR.groupOverrides[group.uuid] ||= {}).emissive_color = color.value;
+		const override = PTR.groupOverrides[group.uuid] ||= {};
+		override.emissive_color = color.value;
+		override.emissive_color_source = 'custom';
+		source.value = 'custom';
 		changed(group, reset);
 	});
 	panel.appendChild(makeRow('发光颜色', [color]));
+	panel.appendChild(el('div', { class: 'ptr_note', text: '强度保留发光贴图的遮罩；指定颜色可独立于表面颜色。光晕由“预览渲染”中的辉光控制。' }));
 	return panel;
 }
 

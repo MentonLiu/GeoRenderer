@@ -198,7 +198,7 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 		const hasMER = !!slot.mer;
 		const hasEmissiveMap = !!slot.emissiveMap;
 		const fullbrightTex = !!(tex && (tex.render_mode === 'emissive' || tex.render_mode === 'additive'));
-		const defEmis = (hasMER || fullbrightTex) ? 1 : 0;
+		const defEmis = (hasMER || hasEmissiveMap || fullbrightTex) ? 1 : 0;
 		const emisVal = (ov.emissive != null ? ov.emissive : defEmis) * settings.emissive_strength;
 
 		let flags = 0;
@@ -206,10 +206,9 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 		if (hasMER) flags |= MF_HAS_MER;
 		if (slot.normal) flags |= MF_HAS_NORMAL;
 		if (!hasMER && hasEmissiveMap) flags |= MF_HAS_EMISSIVE_MAP;
-		if (!hasMER && hasEmissiveMap && slot.emissiveColorMain) flags |= MF_EMIS_MAIN_COLOR;
-		if (!hasMER && hasEmissiveMap && slot.emissiveColorCustom) flags |= MF_EMIS_CUSTOM_COLOR;
+		if (slot.emissiveColorMain) flags |= MF_EMIS_MAIN_COLOR;
+		if (slot.emissiveColorCustom) flags |= MF_EMIS_CUSTOM_COLOR;
 		if (!hasMER && !hasEmissiveMap && emisVal > 0) flags |= MF_FULLBRIGHT;
-		if (ov.emissive != null) flags |= 512;
 		if (ov.roughness != null) flags |= 1024;
 		if (ov.metalness != null) flags |= 2048;
 		if (tex && tex.render_mode === 'additive') flags |= MF_ADDITIVE;
@@ -244,7 +243,6 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 		matData[o + 19] = 1;
 
 		if (emisVal <= 0) slot.emissive = false;
-		else if (ov.emissive != null) slot.emissive = true;
 		else if (hasMER) slot.emissive = emissiveSlots.has(i);
 		else if (hasEmissiveMap) slot.emissive = emissiveMapSlots.has(i);
 		else slot.emissive = true;
