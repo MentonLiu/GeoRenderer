@@ -4888,7 +4888,7 @@
   Plugin.register(PLUGIN_ID, {
     title: "几何渲染器",
     icon: "auto_awesome",
-    author: "PuddingKC",
+    author: "600_liang",
     description: "在独立五步窗口中配置材质、场景与镜头，并使用 GPU 路径追踪渲染模型",
     about: [
       "在 **视图 → 几何渲染器** 中打开",
