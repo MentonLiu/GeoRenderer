@@ -50,6 +50,7 @@ uniform sampler2D uEnvCond;
 uniform sampler2D uEnvMarg;
 uniform ivec2 uEnvDist;
 uniform float uEnvIntensity, uEnvRotation;
+uniform float uBackgroundLod;
 uniform int uBgMode;
 uniform vec3 uBgColor;
 
@@ -452,7 +453,11 @@ vec2 dirToEnvUV(vec3 d) {
 }
 
 vec3 envRadiance(vec3 d) {
-	return texture(uEnv, dirToEnvUV(d)).rgb * uEnvIntensity;
+	return textureLod(uEnv, dirToEnvUV(d), 0.0).rgb * uEnvIntensity;
+}
+
+vec3 backgroundRadiance(vec3 d) {
+	return textureLod(uEnv, dirToEnvUV(d), uBackgroundLod).rgb * uEnvIntensity;
 }
 
 float envPdfDir(vec3 d) {
@@ -784,7 +789,11 @@ vec3 tracePath(vec3 ro, vec3 rd, out float alphaOut, out vec3 gAlbedo, out vec3 
 			if (bounce == 0) {
 				if (uBgMode == 1) { radiance += uBgColor; gAlbedo = uBgColor; }
 				else if (uBgMode == 2) { alphaOut = 0.0; gAlbedo = vec3(0.0); }
-				else { radiance += env + sun; gAlbedo = env; }
+				else {
+					vec3 background = backgroundRadiance(rd);
+					radiance += background + sun;
+					gAlbedo = background;
+				}
 				gNormal = -rd;
 			} else {
 				float we = specularPath ? 1.0 : powerHeuristic(lastPdf, envPdfDir(rd));

@@ -32,6 +32,7 @@ export function updateExportSummary() {
 		`镜头：${s.ortho ? '正交' : `FOV ${s.fov}°`}，光圈 ${s.aperture}，${s.auto_focus ? '自动对焦' : `焦距 ${s.focus_distance}`}`,
 		`材质：${groups} 个组覆盖，默认粗糙度 ${s.def_roughness} / 金属度 ${s.def_metalness}`,
 		`场景（地面）：${scene}；背景环境：${s.env_mode === 'image' && PTR.customEnv ? (PTR.customEnvSource === 'scene' ? background : PTR.customEnvName || '自定义 HDR / 图片') : 'GeoRenderer 环境'}，${formatClock(s.time_of_day)}`,
+		`背景模糊度：${s.background_blur || 0} / 100`,
 		`场景几何：${PTR.tracer?.scene?.previewTriCount || 0} 个三角形（含启用的预览模型）`,
 		`追踪地面：${PTR.tracer?.scene?.sceneTriCount ? '使用场景几何' : s.ground_on ? '开启' : '关闭'}${!PTR.tracer?.scene?.sceneTriCount && groundTexture ? '（' + groundTexture.name + '）' : ''}`,
 		`追踪：${s.max_bounce} 次反弹，${s.light_samples} 次光源采样`,
