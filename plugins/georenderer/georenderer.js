@@ -3710,6 +3710,7 @@
         if (!mesh || element.visibility === false || mesh.visible === false) continue;
         const clone = mesh.clone(true);
         clone.userData.georendererSourceMesh = mesh;
+        clone.matrixAutoUpdate = false;
         const groupChain = groupChainForElement(element);
         clone.traverse((object) => {
           object.userData.georendererGroupChain = groupChain;
