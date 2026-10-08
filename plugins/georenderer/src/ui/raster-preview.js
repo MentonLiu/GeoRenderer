@@ -1,5 +1,6 @@
 import { sunDirection } from '../scene/environment.js';
 import { groupChainForElement, resolveMaterialOverride } from '../scene/group-overrides.js';
+import { activeBlockbenchPreviewModels, activeBlockbenchScene } from '../scene/blockbench-scene.js';
 import { syncControls } from './controls.js';
 import { PTR, saveSettings } from './state.js';
 
@@ -28,9 +29,12 @@ export class RasterPreview {
 		this.groundDisk.rotation.x = -Math.PI / 2;
 		this.scene.add(this.groundDisk);
 		this.model = new THREE.Group();
+		this.previewModels = new THREE.Group();
+		this.previewModelSources = [];
+		this.previewModelKey = '';
 		this.selectionHelper = null;
 		this.ownedMaterials = [];
-		this.scene.add(this.model);
+		this.scene.add(this.previewModels, this.model);
 		this.raf = 0;
 		this.running = false;
 		this.refreshModel();
@@ -131,6 +135,31 @@ export class RasterPreview {
 		this.floor.material.needsUpdate = true;
 	}
 
+	syncPreviewModels() {
+		const models = activeBlockbenchPreviewModels();
+		const key = models.map(model => {
+			const root = model.model_3d;
+			return `${root.uuid}:${root.children.map(child => child.uuid).join(',')}`;
+		}).join('|');
+		if (key !== this.previewModelKey) {
+			this.previewModels.clear();
+			this.previewModelSources = models.map(model => {
+				const clone = model.model_3d.clone(true);
+				clone.matrixAutoUpdate = false;
+				this.previewModels.add(clone);
+				return { source: model.model_3d, clone };
+			});
+			this.previewModelKey = key;
+		}
+		for (const { source, clone } of this.previewModelSources) {
+			source.updateWorldMatrix(true, false);
+			clone.matrix.copy(source.matrixWorld);
+			clone.visible = source.visible;
+		}
+		this.previewModels.updateMatrixWorld(true);
+		return models;
+	}
+
 	draw() {
 		this.syncModelPose();
 		const width = Math.max(1, this.canvas.clientWidth);
@@ -150,7 +179,9 @@ export class RasterPreview {
 			}
 		}
 		const inspection = PTR.step === 'materials' || PTR.step === 'scene';
+		const blockbenchScene = PTR.step === 'materials' ? null : activeBlockbenchScene();
 		const cam = (inspection ? PTR.inspectionCam : PTR.cam).state();
+		if (PTR.step === 'scene' && blockbenchScene?.fov && !cam.ortho) cam.fov = blockbenchScene.fov;
 		const target = cam.ortho ? this.orthoCamera : this.camera;
 		if (cam.ortho) {
 			const halfH = cam.orthoHalfHeight;
@@ -167,9 +198,13 @@ export class RasterPreview {
 		target.lookAt(...cam.target);
 		target.updateMatrixWorld(true);
 		this.activeCamera = target;
+		this.previewModels.visible = PTR.step !== 'materials';
+		const previewModels = this.previewModels.visible ? this.syncPreviewModels() : [];
 		this.grid.visible = PTR.step === 'materials';
-		this.floor.visible = !this.grid.visible && !!settings.ground_on && !(settings.ground_radius > 0);
-		this.groundDisk.visible = !this.grid.visible && !!settings.ground_on && settings.ground_radius > 0;
+		const hasSceneGeometry = blockbenchScene?.preview_models?.some(model => previewModels.includes(model));
+		const showGround = !this.grid.visible && !hasSceneGeometry;
+		this.floor.visible = showGround && !!settings.ground_on && !(settings.ground_radius > 0);
+		this.groundDisk.visible = showGround && !!settings.ground_on && settings.ground_radius > 0;
 		this.floor.position.y = settings.ground_y;
 		this.groundDisk.position.y = settings.ground_y;
 		if (this.groundDisk.visible) this.groundDisk.scale.setScalar(settings.ground_radius);
@@ -184,14 +219,17 @@ export class RasterPreview {
 		}
 		const daylight = Math.max(0.1, Math.min(1, (Math.sin((settings.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
 		this.ambient.intensity = 0.2 + daylight * Math.max(0, settings.env_intensity);
+		this.ambient.color.copy(blockbenchScene?.light_color || new THREE.Color(0xffffff));
 		this.sun.visible = !!settings.sun_enable;
 		const dir = sunDirection(settings);
 		this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
 		this.sun.intensity = Math.max(0, settings.sun_intensity / 4);
 		this.sun.color.set(settings.sun_color);
+		this.scene.fog = blockbenchScene?.fog || null;
+		this.scene.environment = blockbenchScene?.cubemap || null;
 		this.scene.background = this.grid.visible ? new THREE.Color('#20242b') : settings.bg_mode === 'transparent' ? null
-			: PTR.sceneCubemap && settings.bg_mode === 'env'
-			? PTR.sceneCubemap
+			: blockbenchScene?.cubemap && settings.bg_mode === 'env'
+			? blockbenchScene.cubemap
 			: new THREE.Color(settings.bg_mode === 'color' ? settings.bg_color : settings.sky_horizon).multiplyScalar(settings.bg_mode === 'color' ? 1 : 0.12 + 0.88 * daylight);
 		this.renderer.render(this.scene, target);
 	}
@@ -217,6 +255,8 @@ export class RasterPreview {
 		this.stop();
 		this.highlightGroup(null);
 		this.model.clear();
+		this.previewModels.clear();
+		this.previewModelSources = [];
 		for (const material of this.ownedMaterials) material.dispose();
 		this.ownedMaterials = [];
 		this.floor.geometry.dispose();

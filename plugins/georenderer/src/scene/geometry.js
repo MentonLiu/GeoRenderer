@@ -1,4 +1,5 @@
 import { CUBE_FACE_NORMALS, triangleFacesInward, vCross, vDot, vNorm, vSub } from '../core/math.js';
+import { activeBlockbenchPreviewModels, activeBlockbenchScene } from './blockbench-scene.js';
 import { groupChainForElement } from './group-overrides.js';
 
 export const MF_HAS_COLOR = 1;
@@ -100,6 +101,9 @@ export function collectGeometry() {
 	const flips = [];
 	const negativeCube = [];
 	const insideOnly = [];
+	const pendingImages = new Set();
+	let previewTriCount = 0;
+	let sceneTriCount = 0;
 
 	if (typeof Canvas !== 'undefined' && Canvas.scene) Canvas.scene.updateMatrixWorld(true);
 
@@ -200,6 +204,66 @@ export function collectGeometry() {
 		}
 	});
 
+	const activeScene = activeBlockbenchScene();
+	const previewMaterials = new Map();
+	const previewModels = activeBlockbenchPreviewModels();
+	for (const model of previewModels) {
+		const root = model.model_3d;
+		root.updateWorldMatrix(true, true);
+		const isSceneModel = !!activeScene?.preview_models?.includes(model);
+		const visit = (object, visible) => {
+			if (!visible || object.visible === false) return;
+			if (object.isMesh && object.geometry) {
+				const geo = object.geometry;
+				const pos = geo.attributes?.position;
+				const nrm = geo.attributes?.normal;
+				const uv = geo.attributes?.uv;
+				const index = geo.index;
+				if (pos?.array && pos.count >= 3) {
+					const m = object.matrixWorld.elements;
+					const nm = normalMatrix3(m);
+					const mirrored = mat3Determinant(m) < 0 ? 1 : 0;
+					const triCount = Math.floor((index ? index.count : pos.count) / 3);
+					const groups = geo.groups || [];
+					for (let t = 0; t < triCount; t++) {
+						const offset = t * 3;
+						const group = groups.find(item => offset >= item.start && offset + 2 < item.start + item.count);
+						const sourceMaterial = Array.isArray(object.material) ? object.material[group?.materialIndex || 0] : object.material;
+						if (!sourceMaterial || sourceMaterial.visible === false) continue;
+						const idx = [0, 1, 2].map(k => index ? index.array[offset + k] : offset + k);
+						const wp = idx.map(i => transformPoint(m, pos.array[i * pos.itemSize], pos.array[i * pos.itemSize + 1], pos.array[i * pos.itemSize + 2]));
+						const cr = vCross(vSub(wp[1], wp[0]), vSub(wp[2], wp[0]));
+						if (vDot(cr, cr) < 1e-14) continue;
+						for (const point of wp) positions.push(...point);
+						for (const i of idx) {
+							const normal = nrm?.array
+								? vNorm(transformDir(nm, nrm.array[i * nrm.itemSize], nrm.array[i * nrm.itemSize + 1], nrm.array[i * nrm.itemSize + 2]))
+								: vNorm(cr);
+							normals.push(...normal);
+							uvs.push(uv?.array ? uv.array[i * uv.itemSize] : 0, uv?.array ? uv.array[i * uv.itemSize + 1] : 0);
+						}
+						let ref = previewMaterials.get(sourceMaterial);
+						if (!ref) {
+							ref = { uuid: `__bb_preview_${sourceMaterial.uuid || previewMaterials.size}`, previewMaterial: sourceMaterial };
+							previewMaterials.set(sourceMaterial, ref);
+							const image = sourceMaterial.map?.image;
+							if (image?.addEventListener && (!image.complete || !image.naturalWidth)) pendingImages.add(image);
+						}
+						texRefs.push(ref);
+						groupRefs.push([]);
+						flips.push(mirrored);
+						negativeCube.push(false);
+						insideOnly.push(false);
+						previewTriCount++;
+						if (isSceneModel) sceneTriCount++;
+					}
+				}
+			}
+			for (const child of object.children || []) visit(child, true);
+		};
+		visit(root, true);
+	}
+
 	return {
 		positions: new Float32Array(positions),
 		normals: new Float32Array(normals),
@@ -210,6 +274,10 @@ export function collectGeometry() {
 		negativeCube: negativeCube,
 		insideOnly: insideOnly,
 		triCount: texRefs.length,
+		previewTriCount,
+		sceneTriCount,
+		fog: activeScene?.fog || null,
+		pendingImages: [...pendingImages],
 	};
 }
 

@@ -3,6 +3,8 @@ import { clamp } from '../core/math.js';
 import { PTR, formatDuration, saveSettings } from './state.js';
 import { resolveRenderSize } from './workflow-state.js';
 
+const watchedPreviewImages = new WeakSet();
+
 export function showError(err) {
 	console.error('[PathTracer]', err);
 	if (PTR.nodes.overlay) PTR.nodes.overlay.textContent = '错误: ' + (err && err.message ? err.message : err);
@@ -15,6 +17,15 @@ export function rebuildScene() {
 	if (!PTR.open) { PTR.needsRebuild = true; return; }
 	try {
 		const scene = t.buildScene(PTR.settings, PTR.overrides, PTR.groupOverrides);
+		for (const image of scene.pendingImages || []) {
+			if (image.complete && image.naturalWidth) {
+				queueMicrotask(rebuildScene);
+				continue;
+			}
+			if (watchedPreviewImages.has(image)) continue;
+			watchedPreviewImages.add(image);
+			image.addEventListener('load', () => rebuildScene(), { once: true });
+		}
 		PTR.stale = false;
 		if (PTR.refreshMaterialList) PTR.refreshMaterialList();
 		updateStatus(scene);

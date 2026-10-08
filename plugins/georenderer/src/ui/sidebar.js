@@ -5,8 +5,8 @@ import { buildGroupList } from './group-panel.js';
 import { buildMaterialList } from './material-panel.js';
 import { rebuildScene, showError } from './render-loop.js';
 import { PTR, saveSettings } from './state.js';
-import { applyPreset, applyTimeOfDay, formatClock, SCENE_PRESETS } from '../scene/presets.js';
-import { loadBlockbenchScene } from '../scene/blockbench-scene.js';
+import { applyTimeOfDay, formatClock } from '../scene/presets.js';
+import { activeBlockbenchScene, listBlockbenchPreviewModels, listBlockbenchScenes, loadBlockbenchScene, selectBlockbenchScene, setBlockbenchPreviewModelEnabled } from '../scene/blockbench-scene.js';
 import { buildExportPanel, updateExportSummary } from './export-panel.js';
 
 function makeGroundTextureRow() {
@@ -26,6 +26,67 @@ function makeGroundTextureRow() {
 		if (PTR.tracer) rebuildScene();
 	});
 	return makeRow('地面纹理', [select]);
+}
+
+export async function syncBlockbenchScene() {
+	const request = ++PTR.scenePresetRequest;
+	const scene = activeBlockbenchScene();
+	const previousEnv = PTR.customEnv;
+	const previousMode = PTR.settings.env_mode;
+	PTR.settings.scene_preset = scene?.id || '';
+	PTR.refreshPreviewScenes?.();
+	PTR.refreshPreviewModels?.();
+	if (PTR.nodes.sceneSource) PTR.nodes.sceneSource.textContent = scene ? `已选 Blockbench「${scene.name}」，正在读取环境贴图…` : '未选择 Blockbench 预览场景';
+	try {
+		const loaded = scene && PTR.customEnvSource !== 'file' ? await loadBlockbenchScene(scene.id) : null;
+		if (request !== PTR.scenePresetRequest) return;
+		PTR.refreshPreviewModels?.();
+		if (loaded?.environment) {
+			PTR.sceneCubemap = loaded.cubemap;
+			PTR.customEnv = loaded.environment;
+			PTR.customEnvName = scene.name;
+			PTR.customEnvSource = 'scene';
+			PTR.settings.env_mode = 'image';
+		} else if (PTR.customEnvSource !== 'file' && (PTR.customEnv || PTR.settings.env_mode === 'image')) {
+			PTR.sceneCubemap = null;
+			PTR.customEnv = null;
+			PTR.customEnvName = '';
+			PTR.customEnvSource = '';
+			PTR.settings.env_mode = 'sky';
+		}
+		if (PTR.nodes.sceneSource) {
+			const features = [];
+			if (scene?.preview_models?.length) features.push(`${scene.preview_models.length} 个 3D 场景模型`);
+			if (scene?.cubemap) features.push('天空盒');
+			if (loaded?.environment) features.push('立方体贴图环境光');
+			PTR.nodes.sceneSource.textContent = scene
+				? `使用 Blockbench「${scene.name}」的 ${features.length ? features.join('、') : '预览配置'}`
+				: '未选择 Blockbench 预览场景';
+		}
+	} catch (err) {
+		if (request !== PTR.scenePresetRequest) return;
+		if (PTR.customEnvSource !== 'file' && (PTR.customEnv || PTR.settings.env_mode === 'image')) {
+			PTR.sceneCubemap = null;
+			PTR.customEnv = null;
+			PTR.customEnvName = '';
+			PTR.customEnvSource = '';
+			PTR.settings.env_mode = 'sky';
+		}
+		if (PTR.nodes.sceneSource) PTR.nodes.sceneSource.textContent = `Blockbench「${scene.name}」已用于预览，立方体贴图无法用于路径追踪：${err.message}`;
+	}
+	if (PTR.nodes.envName) PTR.nodes.envName.textContent = PTR.customEnv
+		? `${PTR.customEnvName}（${PTR.customEnvSource === 'scene' ? '场景立方体贴图' : '自定义文件'}）`
+		: '(未载入)';
+	syncControls();
+	try {
+		if (previousEnv !== PTR.customEnv || previousMode !== PTR.settings.env_mode) {
+			if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+			else if (PTR.tracer) PTR.needsRebuild = true;
+		}
+	} catch (err) { showError(err); }
+	if (PTR.tracer) rebuildScene();
+	updateExportSummary();
+	saveSettings();
 }
 
 export function buildSidebar() {
@@ -108,47 +169,57 @@ export function buildSidebar() {
 		]),
 	];
 
-	const presets = el('div', { class: 'ptr_presets' });
-	PTR.nodes.sceneSource = el('div', { class: 'ptr_note', text: '可使用 Blockbench 已加载的场景贴图；不可用时使用相近的程序化氛围。' });
-	Object.entries(SCENE_PRESETS).forEach(([id, preset]) => {
-		const button = el('button', { class: 'ptr_btn', text: preset.label });
-		button.addEventListener('click', async () => {
-			const request = ++PTR.scenePresetRequest;
-			applyPreset(PTR.settings, id);
-			applyTimeOfDay(PTR.settings, PTR.settings.time_of_day);
-			PTR.sceneCubemap = null;
-			PTR.customEnv = null;
-			PTR.customEnvName = '';
-			PTR.nodes.sceneSource.textContent = '正在读取 Blockbench 场景…';
-			PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
-			syncControls();
-			saveSettings();
-			try {
-				if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, null);
-				else if (PTR.tracer) PTR.needsRebuild = true;
-			} catch (err) { showError(err); }
-			try {
-				const builtIn = await loadBlockbenchScene(id);
-				if (request !== PTR.scenePresetRequest) return;
-				if (builtIn && builtIn.environment) {
-					PTR.sceneCubemap = builtIn.cubemap;
-					PTR.customEnv = builtIn.environment;
-					PTR.customEnvName = preset.label;
-					PTR.settings.env_mode = 'image';
-					PTR.nodes.sceneSource.textContent = '使用 Blockbench 内置“' + preset.label + '”环境贴图';
-					if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
-					else if (PTR.tracer) PTR.needsRebuild = true;
-				} else {
-					PTR.nodes.sceneSource.textContent = '内置贴图不可用，使用“' + preset.label + '”程序化氛围';
-				}
-				syncControls();
+	const sceneSelect = el('select');
+	PTR.refreshPreviewScenes = () => {
+		const active = activeBlockbenchScene();
+		sceneSelect.replaceChildren(el('option', { value: '', text: '无预览场景' }));
+		for (const scene of listBlockbenchScenes()) {
+			sceneSelect.appendChild(el('option', { value: scene.id, text: scene.name }));
+		}
+		sceneSelect.value = active?.id || '';
+	};
+	PTR.refreshPreviewScenes();
+	const previewModelList = el('div', { class: 'ptr_preview_model_list' });
+	PTR.refreshPreviewModels = () => {
+		previewModelList.replaceChildren();
+		const models = listBlockbenchPreviewModels();
+		if (!models.length) {
+			previewModelList.appendChild(el('div', { class: 'ptr_note', text: '没有可用的独立参照模型' }));
+			return;
+		}
+		for (const model of models) {
+			const box = el('input', { type: 'checkbox', 'aria-label': model.name });
+			box.checked = model.enabled;
+			box.addEventListener('change', () => {
+				PTR.settings.preview_model_overrides = setBlockbenchPreviewModelEnabled(model.id, box.checked);
+				if (PTR.tracer) rebuildScene();
 				saveSettings();
-			} catch (err) {
-				if (request === PTR.scenePresetRequest) PTR.nodes.sceneSource.textContent = '内置贴图读取失败，已使用程序化氛围';
+			});
+			previewModelList.appendChild(makeRow(model.name, [box]));
+		}
+	};
+	PTR.refreshPreviewModels();
+	sceneSelect.addEventListener('change', async () => {
+		sceneSelect.disabled = true;
+		try {
+			if (!await selectBlockbenchScene(sceneSelect.value)) {
+				PTR.nodes.sceneSource.textContent = '预览场景未能加载，请检查场景资源或 Minecraft EULA 状态';
+				PTR.refreshPreviewScenes();
+				return;
 			}
-		});
-		presets.appendChild(button);
+			PTR.customEnvSource = '';
+			await syncBlockbenchScene();
+		} catch (err) {
+			showError(err);
+			PTR.refreshPreviewScenes();
+		} finally {
+			sceneSelect.disabled = false;
+			if (PTR.dialog?.object?.isConnected) PTR.dialog.focus();
+		}
 	});
+	const refreshScenes = el('button', { class: 'ptr_btn', text: '刷新场景列表' });
+	refreshScenes.addEventListener('click', () => syncBlockbenchScene().catch(showError));
+	PTR.nodes.sceneSource = el('div', { class: 'ptr_note', text: '读取 Blockbench 当前预览场景…' });
 	PTR.nodes.timeDisplay = el('strong', { class: 'ptr_time', text: formatClock(PTR.settings.time_of_day) });
 
 	const envFile = el('input', { type: 'file', accept: '.hdr,.png,.jpg,.jpeg,.webp', style: { display: 'none' } });
@@ -162,8 +233,11 @@ export function buildSidebar() {
 	btnLoad.addEventListener('click', () => envFile.click());
 	const btnClear = el('button', { class: 'ptr_btn', text: '清除' });
 	btnClear.addEventListener('click', () => {
+		PTR.scenePresetRequest++;
 		PTR.customEnv = null;
 		PTR.customEnvName = '';
+		PTR.customEnvSource = '';
+		PTR.sceneCubemap = null;
 		PTR.nodes.envName.textContent = '(未载入)';
 		if (PTR.settings.env_mode === 'image') { PTR.settings.env_mode = 'sky'; syncControls(); }
 		try {
@@ -177,11 +251,18 @@ export function buildSidebar() {
 
 	const envCards = [
 		card('场景与时间', 'public', [
-			presets,
+			makeRow('Blockbench 预览场景', [sceneSelect]),
+			refreshScenes,
 			PTR.nodes.sceneSource,
+			el('div', { class: 'ptr_note', text: '场景选择只应用于 GeoRenderer，不会切换 Blockbench 主视图。' }),
+			el('div', { class: 'ptr_note', text: '第 3～5 步沿用这里的场景模型和参照物；第 4、5 步还会追踪其几何、纹理与场景立方体贴图。有场景几何时自动隐藏额外的 GeoRenderer 地面。' }),
 			rowSlider('当前时间', 'time_of_day', 0, 24, 0.25, 2),
 			PTR.nodes.timeDisplay,
-			el('div', { class: 'ptr_note', text: '时间会联动太阳高度和方位；也可继续手动调整光照方向。' }),
+			el('div', { class: 'ptr_note', text: '时间会联动 GeoRenderer 的太阳光；Blockbench 场景贴图保持原样。' }),
+		]),
+		card('独立参照模型', 'accessibility_new', [
+			previewModelList,
+			el('div', { class: 'ptr_note', text: '这些开关只影响 GeoRenderer 预览和渲染，不改变 Blockbench 主视图。' }),
 		]),
 		card('环境光', 'wb_sunny', [
 			rowSelect('环境类型', 'env_mode', { sky: '程序化天空', gradient: '渐变', solid: '纯色', image: 'HDR / 图片' }),

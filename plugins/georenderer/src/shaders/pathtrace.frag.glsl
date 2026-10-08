@@ -64,6 +64,9 @@ uniform vec3 uGroundColor;
 uniform int uGroundTexOn;
 uniform vec4 uGroundRect;
 uniform float uGroundTexScale;
+uniform int uFogMode;
+uniform vec3 uFogColor;
+uniform float uFogNear, uFogFar, uFogDensity;
 
 uniform sampler2D uAccum;
 #ifndef PTR_COLOR_ONLY
@@ -110,6 +113,7 @@ struct Mat {
 	float transm, cutoff, nscale;
 	int amode;
 	vec3 emisColor;
+	float opacity;
 };
 
 Mat loadMat(int id) {
@@ -126,6 +130,7 @@ Mat loadMat(int id) {
 	m.transm = m3.x; m.cutoff = m3.y; m.nscale = m3.z;
 	m.amode = int(m3.w + 0.5);
 	m.emisColor = m4.rgb;
+	m.opacity = m4.w;
 	return m;
 }
 
@@ -287,10 +292,10 @@ Mat matOfTri(int i) {
 }
 
 float alphaOfTri(int i, vec2 bc, Mat m) {
-	if ((m.flags & MF_HAS_COLOR) == 0) return 1.0;
+	if ((m.flags & MF_HAS_COLOR) == 0) return m.opacity;
 	vec2 uv = triUV(i, bc);
 	bool rep = (m.flags & MF_WRAP_REPEAT) != 0;
-	return sampleAtlas(uAtlasC, m.rect, uv, rep).a;
+	return sampleAtlas(uAtlasC, m.rect, uv, rep).a * m.opacity;
 }
 
 bool alphaPassThrough(Mat m, float alpha) {
@@ -392,7 +397,7 @@ Surface getSurface(Hit hit, vec3 ro, vec3 rd) {
 		alpha = c.a;
 	}
 	s.albedo = base;
-	s.alpha = alpha;
+	s.alpha = alpha * m.opacity;
 	s.cutoff = m.cutoff;
 	s.amode = m.amode;
 	s.rough = clamp(m.rough, 0.015, 1.0);
@@ -938,6 +943,13 @@ void main() {
 	float alpha, depth;
 	vec3 alb, nrm;
 	vec3 c = tracePath(ro, rd, alpha, alb, nrm, depth);
+	if (uFogMode != 0 && depth < 1.0e6 && alpha > 0.0) {
+		float fog = uFogMode == 1
+			? clamp((depth - uFogNear) / max(uFogFar - uFogNear, 1.0e-6), 0.0, 1.0)
+			: 1.0 - exp(-uFogDensity * uFogDensity * depth * depth);
+		c = mix(c, uFogColor, fog);
+		alb = mix(alb, uFogColor, fog);
+	}
 #ifndef PTR_COLOR_ONLY
 	vec3 demod = c / max(alb, vec3(0.02));
 	float l = dot(demod, vec3(0.2126, 0.7152, 0.0722));

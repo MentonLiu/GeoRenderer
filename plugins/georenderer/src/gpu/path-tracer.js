@@ -166,6 +166,10 @@ export class PathTracer {
 
 		this.scene = {
 			triCount: n,
+			previewTriCount: geo.previewTriCount,
+			sceneTriCount: geo.sceneTriCount,
+			fog: geo.fog,
+			pendingImages: geo.pendingImages,
 			lightCount: lightList.length,
 			lightW: lightW,
 			texTriPos: texTriPos,
@@ -440,7 +444,13 @@ export class PathTracer {
 			gl.uniform3f(u.uSunRadiance, 0, 0, 0);
 		}
 
-		gl.uniform1i(u.uGroundOn, settings.ground_on ? 1 : 0);
+		gl.uniform1i(u.uGroundOn, settings.ground_on && !s.sceneTriCount ? 1 : 0);
+		const fog = s.fog;
+		gl.uniform1i(u.uFogMode, fog ? (fog.isFogExp2 ? 2 : 1) : 0);
+		gl.uniform3f(u.uFogColor, fog?.color?.r || 0, fog?.color?.g || 0, fog?.color?.b || 0);
+		gl.uniform1f(u.uFogNear, fog?.near || 0);
+		gl.uniform1f(u.uFogFar, fog?.far || 1);
+		gl.uniform1f(u.uFogDensity, fog?.density || 0);
 		gl.uniform1i(u.uGroundCatcher, settings.ground_catcher ? 1 : 0);
 		gl.uniform1f(u.uGroundY, settings.ground_y);
 		gl.uniform1f(u.uGroundRough, clamp(settings.ground_rough, 0.02, 1));
