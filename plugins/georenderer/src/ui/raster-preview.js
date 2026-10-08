@@ -51,6 +51,10 @@ export class RasterPreview {
 			if (!mesh || element.visibility === false || mesh.visible === false) continue;
 			const clone = mesh.clone(true);
 			clone.userData.georendererSourceMesh = mesh;
+			// The preview clone is detached from Blockbench's parent hierarchy, so
+			// its root matrix must remain the source mesh's world matrix. Rebuilding
+			// the local matrix here drops transforms inherited from parent groups.
+			clone.matrixAutoUpdate = false;
 			const groupChain = groupChainForElement(element);
 			clone.traverse(object => { object.userData.georendererGroupChain = groupChain; });
 			const override = resolveMaterialOverride(null, groupChain, null, PTR.groupOverrides);
