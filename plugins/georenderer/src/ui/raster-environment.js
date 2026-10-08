@@ -1,4 +1,5 @@
 import { generateSkyPixels, resampleEquirect } from '../scene/environment.js';
+import { MAX_ENV_IMAGE_SIZE } from '../core/config.js';
 
 const ENV_KEYS = ['env_mode', 'env_rotation', 'time_of_day', 'sky_zenith', 'sky_horizon', 'sky_ground', 'sky_haze', 'grad_top', 'grad_bottom', 'solid_color', 'sun_enable', 'sun_elevation', 'sun_azimuth', 'sun_angle', 'sun_intensity', 'sun_color'];
 
@@ -15,6 +16,7 @@ function rotatePixels(data, width, height, rotation) {
 export class RasterEnvironment {
 	constructor(renderer) {
 		this.pmrem = new THREE.PMREMGenerator(renderer);
+		this.maxTextureSize = renderer.capabilities?.maxTextureSize || MAX_ENV_IMAGE_SIZE;
 		this.target = null;
 		this.key = '';
 		this.source = null;
@@ -37,7 +39,7 @@ export class RasterEnvironment {
 		finally { texture.dispose(); }
 		this.target?.dispose();
 		this.background?.dispose();
-		const bgWidth = source ? Math.min(2048, source.width) : w;
+		const bgWidth = source ? Math.min(MAX_ENV_IMAGE_SIZE, this.maxTextureSize, source.width) : w;
 		const bgHeight = source ? Math.max(1, Math.round(bgWidth * source.height / source.width)) : h;
 		const bgData = source ? rotatePixels(resampleEquirect(source, bgWidth, bgHeight), bgWidth, bgHeight, settings.env_rotation) : rotated;
 		this.background = new THREE.DataTexture(bgData, bgWidth, bgHeight, THREE.RGBAFormat, THREE.FloatType);

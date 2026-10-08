@@ -1,6 +1,10 @@
 import { srgbToLinear } from '../core/math.js';
+import { MAX_ENV_IMAGE_SIZE } from '../core/config.js';
 
-const convertedCubemaps = new WeakMap();
+// Retain one high-resolution conversion so browsing presets cannot accumulate large panoramas.
+let convertedCubemap = null;
+let convertedEnvironment = null;
+const linearByte = Float32Array.from({ length: 256 }, (_, value) => srgbToLinear(value / 255));
 const loadingScenes = new WeakMap();
 let selectedSceneId = '';
 let sceneSelectionRequest = 0;
@@ -65,17 +69,19 @@ async function prepareScene(scene, includeModels = true) {
 	return true;
 }
 
-function cubeFace(direction) {
-	const [x, y, z] = direction;
+function cubeFace(x, y, z) {
 	const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
 	if (ax >= ay && ax >= az) return x > 0 ? [0, -z / ax, -y / ax] : [1, z / ax, -y / ax];
 	if (ay >= ax && ay >= az) return y > 0 ? [2, x / ay, z / ay] : [3, x / ay, -z / ay];
 	return z > 0 ? [4, x / az, -y / az] : [5, -x / az, -y / az];
 }
 
-export function cubemapToEquirect(cubemap, width = 512, height = 256) {
+export function cubemapToEquirect(cubemap, width, height) {
 	const faces = cubemap && cubemap.image;
 	if (!Array.isArray(faces) || faces.length !== 6) return null;
+	const faceSize = Math.max(...faces.map(face => (face?.image || face)?.width || 0));
+	width = width || Math.min(MAX_ENV_IMAGE_SIZE, Math.max(512, 4 * faceSize));
+	height = height || Math.round(width / 2);
 	const faceData = Array.from({ length: 6 }, (_, index) => {
 		const face = faces[index];
 		const image = face && (face.image || face);
@@ -87,18 +93,29 @@ export function cubemapToEquirect(cubemap, width = 512, height = 256) {
 		return { width: canvas.width, height: canvas.height, data: context.getImageData(0, 0, canvas.width, canvas.height).data };
 	});
 	const data = new Float32Array(width * height * 4);
+	const longitudes = Array.from({ length: width }, (_, x) => {
+		const longitude = 2 * Math.PI * ((x + 0.5) / width - 0.5);
+		return [Math.cos(longitude), Math.sin(longitude)];
+	});
 	for (let y = 0; y < height; y++) {
 		const latitude = Math.PI * (0.5 - (y + 0.5) / height);
+		const cosLatitude = Math.cos(latitude), sinLatitude = Math.sin(latitude);
 		for (let x = 0; x < width; x++) {
-			const longitude = 2 * Math.PI * ((x + 0.5) / width - 0.5);
-			const direction = [Math.cos(latitude) * Math.cos(longitude), Math.sin(latitude), Math.cos(latitude) * Math.sin(longitude)];
-			const [index, u, v] = cubeFace(direction);
+			const [index, u, v] = cubeFace(cosLatitude * longitudes[x][0], sinLatitude, cosLatitude * longitudes[x][1]);
 			const face = faceData[index];
-			const fx = Math.max(0, Math.min(face.width - 1, Math.floor((u + 1) * 0.5 * face.width)));
-			const fy = Math.max(0, Math.min(face.height - 1, Math.floor((v + 1) * 0.5 * face.height)));
-			const source = (fy * face.width + fx) * 4;
+			const fx = Math.max(0, Math.min(face.width - 1, (u + 1) * 0.5 * face.width - 0.5));
+			const fy = Math.max(0, Math.min(face.height - 1, (v + 1) * 0.5 * face.height - 0.5));
+			const x0 = Math.floor(fx), y0 = Math.floor(fy);
+			const x1 = Math.min(face.width - 1, x0 + 1), y1 = Math.min(face.height - 1, y0 + 1);
+			const tx = fx - x0, ty = fy - y0;
+			const p00 = (y0 * face.width + x0) * 4, p10 = (y0 * face.width + x1) * 4;
+			const p01 = (y1 * face.width + x0) * 4, p11 = (y1 * face.width + x1) * 4;
 			const destination = (y * width + x) * 4;
-			for (let channel = 0; channel < 3; channel++) data[destination + channel] = srgbToLinear(face.data[source + channel] / 255);
+			for (let channel = 0; channel < 3; channel++) {
+				const top = linearByte[face.data[p00 + channel]] * (1 - tx) + linearByte[face.data[p10 + channel]] * tx;
+				const bottom = linearByte[face.data[p01 + channel]] * (1 - tx) + linearByte[face.data[p11 + channel]] * tx;
+				data[destination + channel] = top * (1 - ty) + bottom * ty;
+			}
 			data[destination + 3] = 1;
 		}
 	}
@@ -129,8 +146,11 @@ export async function loadBlockbenchScene(id, { includeModels = true } = {}) {
 	if (!scene.cubemap) return { cubemap: null, environment: null };
 	const cubemap = scene.cubemap;
 	await waitForCubemap(cubemap);
-	if (!convertedCubemaps.has(cubemap)) convertedCubemaps.set(cubemap, cubemapToEquirect(cubemap));
-	return { cubemap, environment: convertedCubemaps.get(cubemap) };
+	if (convertedCubemap !== cubemap) {
+		convertedEnvironment = cubemapToEquirect(cubemap);
+		convertedCubemap = cubemap;
+	}
+	return { cubemap, environment: convertedEnvironment };
 }
 
 export function activeBlockbenchPreviewModels() {

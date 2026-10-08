@@ -1,4 +1,4 @@
-import { BVH_TEXELS, ENV_H, ENV_W, MAT_TEXELS, TRI_ATTR_TEXELS, TRI_POS_TEXELS } from '../core/config.js';
+import { BVH_TEXELS, ENV_H, ENV_W, MAT_TEXELS, MAX_ENV_IMAGE_SIZE, TRI_ATTR_TEXELS, TRI_POS_TEXELS } from '../core/config.js';
 import { clamp, hexToLinear, vCross, vDot, vNorm, vSub } from '../core/math.js';
 import { FS_BLOOM_BLUR, FS_BLOOM_BRIGHT, FS_COMPOSITE, FS_DENOISE, FS_FINAL, FS_PATHTRACE, FS_PATHTRACE_COLOR_ONLY, FS_TONEMAP, VS_FULLSCREEN } from './shaders.js';
 import { createAtlasTexture, createDataTexture, createEnvTexture, createFBO, createProgram, createR32FTexture, createRenderTexture } from './webgl.js';
@@ -214,13 +214,21 @@ export class PathTracer {
 		}
 		let pixels, w = ENV_W, h = ENV_H;
 		if (settings.env_mode === 'image' && customImage) {
+			const limit = Math.min(MAX_ENV_IMAGE_SIZE, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+			const scale = Math.min(1, limit / customImage.width, limit / customImage.height);
+			w = Math.max(1, Math.round(customImage.width * scale));
+			h = Math.max(1, Math.round(customImage.height * scale));
 			pixels = resampleEquirect(customImage, w, h);
 		} else {
 			pixels = generateSkyPixels(settings);
 		}
-		const dist = buildEnvDistribution(pixels, w, h);
+		// Keep lighting importance sampling small while retaining background image detail.
+		const distributionPixels = w === ENV_W && h === ENV_H ? pixels : resampleEquirect({ width: w, height: h, data: pixels }, ENV_W, ENV_H);
+		const dist = buildEnvDistribution(distributionPixels, ENV_W, ENV_H);
 		this.env = {
-			tex: createEnvTexture(gl, pixels, w, h),
+			tex: createEnvTexture(gl, pixels, w, h, true),
+			width: w,
+			height: h,
 			cond: createR32FTexture(gl, dist.cond, dist.width + 1, dist.height),
 			marg: createR32FTexture(gl, dist.marg, dist.height + 1, 1),
 			distW: dist.width,
@@ -420,6 +428,8 @@ export class PathTracer {
 		gl.uniform2i(u.uEnvDist, this.env.distW, this.env.distH);
 		gl.uniform1f(u.uEnvIntensity, settings.env_intensity);
 		gl.uniform1f(u.uEnvRotation, settings.env_rotation * Math.PI / 180);
+		const maxBackgroundLod = Math.max(0, Math.log2(Math.max(this.env.width, this.env.height)) - 3);
+		gl.uniform1f(u.uBackgroundLod, clamp(Number(settings.background_blur) || 0, 0, 100) / 100 * maxBackgroundLod);
 		gl.uniform1i(u.uBgMode, settings.bg_mode === 'color' ? 1 : (settings.bg_mode === 'transparent' ? 2 : 0));
 		const bg = hexToLinear(settings.bg_color);
 		gl.uniform3f(u.uBgColor, bg[0], bg[1], bg[2]);

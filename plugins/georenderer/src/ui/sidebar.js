@@ -388,6 +388,10 @@ export function buildSidebar() {
 	const materialCards = [materialSettings, outlineCard];
 
 	const postCards = [
+		card('背景清晰度', 'blur_on', [
+			rowSlider('背景模糊度', 'background_blur', 0, 100, 1, 0),
+			el('div', { class: 'ptr_note', text: '0 保留背景贴图的清晰度，数值越大越柔化。用于预览与最终渲染的环境背景，不改变环境照明与材质反射。光圈仍会产生景深虚化。' }),
+		]),
 		card('色调映射', 'tune', [
 			rowSelect('色调映射', 'tone_mapping', { none: '无', reinhard: 'Reinhard', aces: 'ACES', filmic: 'Filmic', agx: 'AgX' }),
 			rowSlider('曝光', 'exposure', 0.05, 8, 0.01, 2),

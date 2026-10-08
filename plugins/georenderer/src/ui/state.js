@@ -6,6 +6,7 @@ const STORAGE_KEY = 'pathtracer_preview_settings';
 export const CHANGE_KIND = {
 	def_roughness: 'scene', def_metalness: 'scene', emissive_strength: 'scene',
 	ground_texture_uuid: 'scene', ground_texture_scale: 'reset',
+	background_blur: 'reset',
 	time_of_day: 'env',
 	alpha_cutoff: 'scene', alpha_mode: 'scene', render_sides: 'scene',
 	env_mode: 'env', sun_enable: 'env', sun_elevation: 'env', sun_azimuth: 'env',
