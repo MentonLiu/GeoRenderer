@@ -3710,7 +3710,6 @@
         if (!mesh || element.visibility === false || mesh.visible === false) continue;
         const clone = mesh.clone(true);
         clone.userData.georendererSourceMesh = mesh;
-        clone.matrixAutoUpdate = false;
         const groupChain = groupChainForElement(element);
         clone.traverse((object) => {
           object.userData.georendererGroupChain = groupChain;
@@ -3721,6 +3720,9 @@
             if (!object.isMesh || !object.material) return;
             const customize = (material) => {
               const copy = material.clone();
+              for (const [key, uniform] of Object.entries(material.uniforms || {})) {
+                if (uniform.value?.isTexture && copy.uniforms?.[key]) copy.uniforms[key].value = uniform.value;
+              }
               if (override.roughness != null && "roughness" in copy) copy.roughness = override.roughness;
               if (override.metalness != null && "metalness" in copy) copy.metalness = override.metalness;
               if (override.emissive != null && copy.emissive) {
