@@ -27,7 +27,7 @@ Plugin.register(PLUGIN_ID, {
 		'',
 		'官方更新地址：https://github.com/Null-K/blockbench-plugins'
 	].join('\n'),
-	version: '2.0.0',
+	version: '2.1.0',
 	min_version: '4.8.0',
 	variant: 'both',
 	tags: ['Rendering', 'Preview'],
