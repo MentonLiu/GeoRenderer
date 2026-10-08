@@ -114,8 +114,6 @@ function buildWindow() {
 	const btnPause = el('button', { class: 'ptr_btn' }, [btnPauseIcon, btnPauseLabel]);
 	btnPause.addEventListener('click', () => {
 		PTR.paused = !PTR.paused;
-		btnPauseIcon.textContent = PTR.paused ? 'play_arrow' : 'pause';
-		btnPauseLabel.textContent = PTR.paused ? '继续' : '暂停';
 		PTR.lastFrame = performance.now();
 		updateStatus();
 	});
@@ -157,7 +155,7 @@ function buildWindow() {
 	PTR.nodes = Object.assign(PTR.nodes || {}, {
 		canvas: canvas, rasterCanvas: rasterCanvas, frame: frame,
 		overlay: overlay, viewport: viewport, sidebar: sidebar,
-		status: status, bar: bar, wrapper: wrapper, btnPause: btnPause, watermark: watermark,
+		status: status, bar: bar, wrapper: wrapper, btnPause: btnPause, btnPauseIcon: btnPauseIcon, btnPauseLabel: btnPauseLabel, watermark: watermark,
 		btnStart: btnStart, btnCopy: btnCopy, btnSave: btnSave, btnBlockbench: btnBlockbench,
 		toolGroup: toolGroup, footer: footer,
 	});
@@ -243,6 +241,8 @@ function ensureRasterPreview() {
 }
 
 function updateExportActions() {
+	PTR.nodes.btnPauseIcon.textContent = PTR.paused ? 'play_arrow' : 'pause';
+	PTR.nodes.btnPauseLabel.textContent = PTR.paused ? '继续' : '暂停';
 	const ready = canExport(PTR.step, PTR.finalStarted, PTR.tracer ? PTR.tracer.spp : 0, PTR.settings.final_samples);
 	for (const button of [PTR.nodes.btnCopy, PTR.nodes.btnSave, PTR.nodes.btnBlockbench]) button.disabled = !ready;
 	PTR.nodes.btnStart.disabled = !PTR.tracer || (PTR.finalStarted && !ready);
