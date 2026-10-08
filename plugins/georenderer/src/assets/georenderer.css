@@ -23,14 +23,14 @@
 	background-size: 16px 16px;
 	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
 }
-#ptr_raster_canvas { position: absolute; inset: 0; }
+#ptr_frame #ptr_raster_canvas { position: absolute; inset: 0; z-index: 1; background: none; }
 #ptr_frame[data-step="materials"] #ptr_raster_canvas:not(.dragging) { cursor: pointer; }
 #ptr_canvas { position: absolute; inset: 0; }
 #ptr_frame[data-step="preview"] #ptr_canvas,
 #ptr_frame[data-step="export"] #ptr_canvas { cursor: default; }
 #ptr_viewport canvas.dragging { cursor: grabbing; }
 #ptr_overlay {
-	position: absolute; left: 8px; top: 8px; pointer-events: none;
+	position: absolute; left: 8px; top: 8px; z-index: 2; pointer-events: none;
 	font-size: 11px; color: #fff; text-shadow: 0 1px 3px #000;
 	background: rgba(0,0,0,0.45); padding: 3px 7px; border-radius: 3px;
 }

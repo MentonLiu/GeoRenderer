@@ -6,7 +6,7 @@ import { PTR, saveSettings } from './state.js';
 import { RasterMaterials } from './raster-materials.js';
 import { RasterEnvironment } from './raster-environment.js';
 
-// Camera setup uses a lightweight preview before path-tracing buffers exist.
+// Also provides the depth-tested grid, selection outline and picking for live tracing.
 export class RasterPreview {
 	constructor(canvas) {
 		this.canvas = canvas;
@@ -164,7 +164,7 @@ export class RasterPreview {
 		this.renderer.toneMapping = { none: THREE.NoToneMapping, reinhard: THREE.ReinhardToneMapping, filmic: THREE.CineonToneMapping }[settings.tone_mapping] ?? THREE.ACESFilmicToneMapping;
 		this.renderer.toneMappingExposure = settings.exposure;
 		for (const material of this.ownedMaterials) material.envMapIntensity = settings.env_intensity;
-		if (settings.auto_sync && PTR.step === 'camera' && PTR.cam.syncFromPreview()) {
+		if (!this.overlayOnly && settings.auto_sync && PTR.step === 'camera' && PTR.cam.syncFromPreview()) {
 			if (settings.fov !== PTR.cam.fov || settings.ortho !== PTR.cam.ortho || settings.camera_distance !== PTR.cam.distance) {
 				settings.fov = PTR.cam.fov;
 				settings.ortho = PTR.cam.ortho;
@@ -193,11 +193,11 @@ export class RasterPreview {
 		target.lookAt(...cam.target);
 		target.updateMatrixWorld(true);
 		this.activeCamera = target;
-		this.previewModels.visible = PTR.step !== 'materials';
+		this.previewModels.visible = !this.overlayOnly && PTR.step !== 'materials';
 		const previewModels = this.previewModels.visible ? this.syncPreviewModels() : [];
 		this.grid.visible = PTR.step === 'materials';
 		const hasSceneGeometry = blockbenchScene?.preview_models?.some(model => previewModels.includes(model));
-		const showGround = !this.grid.visible && !hasSceneGeometry;
+		const showGround = !this.overlayOnly && !this.grid.visible && !hasSceneGeometry;
 		this.floor.visible = showGround && !!settings.ground_on && !(settings.ground_radius > 0);
 		this.groundDisk.visible = showGround && !!settings.ground_on && settings.ground_radius > 0;
 		this.floor.position.y = settings.ground_y;
@@ -221,12 +221,17 @@ export class RasterPreview {
 		this.sun.intensity = Math.max(0, settings.sun_intensity / 4);
 		this.sun.color.set(settings.sun_color);
 		this.scene.fog = blockbenchScene?.fog || null;
-		this.scene.environment = this.environment.sync(settings, PTR.customEnv);
-		this.scene.background = this.grid.visible ? new THREE.Color('#20242b') : settings.bg_mode === 'transparent' ? null
+		this.scene.environment = this.overlayOnly ? null : this.environment.sync(settings, PTR.customEnv);
+		this.scene.background = this.overlayOnly || settings.bg_mode === 'transparent' ? null : this.grid.visible ? new THREE.Color('#20242b')
 			: blockbenchScene?.cubemap && settings.bg_mode === 'env'
 			? blockbenchScene.cubemap
 			: new THREE.Color(settings.bg_mode === 'color' ? settings.bg_color : settings.sky_horizon).multiplyScalar(settings.bg_mode === 'color' ? 1 : 0.12 + 0.88 * daylight);
-		this.renderer.render(this.scene, target);
+		if (this.overlayOnly) {
+			for (const material of this.ownedMaterials) material.colorWrite = false;
+			this.scene.fog = null;
+		}
+		try { this.renderer.render(this.scene, target); }
+		finally { if (this.overlayOnly) for (const material of this.ownedMaterials) material.colorWrite = true; }
 	}
 
 	start() {

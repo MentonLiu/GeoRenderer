@@ -304,17 +304,14 @@ bool alphaPassThrough(Mat m, float alpha) {
 	return rnd() >= alpha;
 }
 
-vec3 triEmission(int i, vec2 bc) {
-	int matId = int(fTri(i * 3 + 0).w + 0.5);
-	Mat m = loadMat(matId);
-	vec2 uv = triUV(i, bc);
+vec3 materialEmission(Mat m, vec2 uv, vec3 base) {
 	bool rep = (m.flags & MF_WRAP_REPEAT) != 0;
-	vec3 base = m.tint;
-	if ((m.flags & MF_HAS_COLOR) != 0) base *= srgbToLin(sampleAtlas(uAtlasC, m.rect, uv, rep).rgb);
 	if ((m.flags & MF_FORCE_EMISSION) != 0) return base * m.emisColor * m.emis;
 	if ((m.flags & MF_HAS_MER) != 0) {
 		float e = sampleAtlas(uAtlasM, m.rect, uv, rep).g;
-		return base * e * m.emis;
+		if ((m.flags & MF_EMIS_CUSTOM_COLOR) != 0) return m.emisColor * e * m.emis;
+		if ((m.flags & MF_EMIS_MAIN_COLOR) != 0) return base * e * m.emis;
+		return base * m.emisColor * e * m.emis;
 	}
 	if ((m.flags & MF_HAS_EMISSIVE_MAP) != 0) {
 		vec3 emsCol = srgbToLin(sampleAtlas(uAtlasE, m.rect, uv, rep).rgb);
@@ -323,8 +320,20 @@ vec3 triEmission(int i, vec2 bc) {
 		if ((m.flags & MF_EMIS_MAIN_COLOR) != 0) return base * mask * m.emis;
 		return emsCol * m.emis;
 	}
-	if ((m.flags & MF_FULLBRIGHT) != 0) return base * m.emis;
+	if ((m.flags & MF_FULLBRIGHT) != 0) {
+		if ((m.flags & MF_EMIS_CUSTOM_COLOR) != 0) return m.emisColor * m.emis;
+		if ((m.flags & MF_EMIS_MAIN_COLOR) != 0) return base * m.emis;
+		return base * m.emisColor * m.emis;
+	}
 	return vec3(0.0);
+}
+
+vec3 triEmission(int i, vec2 bc) {
+	Mat m = loadMat(int(fTri(i * 3 + 0).w + 0.5));
+	vec2 uv = triUV(i, bc);
+	vec3 base = m.tint;
+	if ((m.flags & MF_HAS_COLOR) != 0) base *= srgbToLin(sampleAtlas(uAtlasC, m.rect, uv, (m.flags & MF_WRAP_REPEAT) != 0).rgb);
+	return materialEmission(m, uv, base);
 }
 
 void onb(vec3 n, out vec3 t, out vec3 b) {
@@ -409,21 +418,8 @@ Surface getSurface(Hit hit, vec3 ro, vec3 rd) {
 		vec3 mer = sampleAtlas(uAtlasM, m.rect, s.uv, rep).rgb;
 		s.metal = clamp(mer.r, 0.0, 1.0);
 		s.rough = clamp(mer.b, 0.015, 1.0);
-		s.emission = base * mer.g * m.emis;
-	} else if ((m.flags & MF_HAS_EMISSIVE_MAP) != 0) {
-		vec3 emsCol = srgbToLin(sampleAtlas(uAtlasE, m.rect, s.uv, rep).rgb);
-		float mask = dot(emsCol, vec3(0.2126, 0.7152, 0.0722));
-		if ((m.flags & MF_EMIS_CUSTOM_COLOR) != 0) {
-			s.emission = m.emisColor * mask * m.emis;
-		} else if ((m.flags & MF_EMIS_MAIN_COLOR) != 0) {
-			s.emission = base * mask * m.emis;
-		} else {
-			s.emission = emsCol * m.emis;
-		}
-	} else if ((m.flags & MF_FULLBRIGHT) != 0) {
-		s.emission = base * m.emis;
 	}
-	if ((m.flags & MF_FORCE_EMISSION) != 0) s.emission = base * m.emisColor * m.emis;
+	s.emission = materialEmission(m, s.uv, base);
 	if ((m.flags & MF_FORCE_ROUGHNESS) != 0) s.rough = clamp(m.rough, 0.015, 1.0);
 	if ((m.flags & MF_FORCE_METALNESS) != 0) s.metal = clamp(m.metal, 0.0, 1.0);
 
@@ -534,12 +530,15 @@ float powerHeuristic(float a, float b) {
 float specProb(vec3 albedo, float metal) {
 	float ds = luma(albedo) * (1.0 - metal);
 	float ss = luma(mix(vec3(0.04), albedo, metal)) + metal * 0.5;
-	return clamp(ss / max(ds + ss, 1e-4), 0.12, 0.9);
+	return clamp(ss / max(ds + ss, 1e-4), 0.12, 1.0);
 }
-float distGGX(float NoH, float a) {
+float distGGX(vec3 N, vec3 H, float a) {
 	float a2 = a * a;
-	float d = NoH * NoH * (a2 - 1.0) + 1.0;
-	return a2 / max(PI * d * d, 1e-9);
+	float NoH = max(dot(N, H), 0.0);
+	vec3 NxH = cross(N, H);
+	// Avoid cancellation and a flattened reflection peak at low roughness.
+	float d = dot(NxH, NxH) + a2 * NoH * NoH;
+	return a2 / max(PI * d * d, 1e-30);
 }
 float smithG(float NoV, float NoL, float a) {
 	float a2 = a * a;
@@ -548,23 +547,26 @@ float smithG(float NoV, float NoL, float a) {
 	return 0.5 / max(gv + gl, 1e-9);
 }
 
+float smithG1(float NoV, float a) {
+	return 2.0 * NoV / max(NoV + sqrt(a * a + (1.0 - a * a) * NoV * NoV), 1e-9);
+}
+
 vec3 bsdfEval(vec3 N, vec3 V, vec3 L, vec3 albedo, float rough, float metal, out float pdf) {
 	pdf = 0.0;
 	float NoL = dot(N, L);
 	float NoV = dot(N, V);
 	if (NoL <= 0.0 || NoV <= 0.0) return vec3(0.0);
 	vec3 H = normalize(V + L);
-	float NoH = max(dot(N, H), 0.0);
 	float VoH = max(dot(V, H), 1e-5);
 	float a = max(rough * rough, 1e-4);
 	vec3 f0 = mix(vec3(0.04), albedo, metal);
 	vec3 F = f0 + (1.0 - f0) * pow(clamp(1.0 - VoH, 0.0, 1.0), 5.0);
-	float D = distGGX(NoH, a);
+	float D = distGGX(N, H, a);
 	float Vis = smithG(NoV, NoL, a);
 	vec3 spec = F * D * Vis;
-	vec3 diff = albedo * (1.0 - metal) * INV_PI;
+	vec3 diff = (1.0 - F) * albedo * (1.0 - metal) * INV_PI;
 	float ps = specProb(albedo, metal);
-	float pdfS = D * NoH / (4.0 * VoH);
+	float pdfS = D * smithG1(NoV, a) / max(4.0 * NoV, 1e-9);
 	float pdfD = NoL * INV_PI;
 	pdf = mix(pdfD, pdfS, ps);
 	return (diff + spec) * NoL;
@@ -578,20 +580,29 @@ vec3 cosineSample(vec3 n, vec2 u) {
 	return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));
 }
 
-vec3 ggxSampleH(vec3 n, float a, vec2 u) {
-	float phi = 2.0 * PI * u.x;
-	float cosT = sqrt(max(0.0, (1.0 - u.y) / (1.0 + (a * a - 1.0) * u.y)));
-	float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
+// Heitz 2018, Sampling the GGX Distribution of Visible Normals (JCGT 7(4)).
+vec3 ggxSampleH(vec3 n, vec3 V, float a, vec2 u) {
 	vec3 t, b;
 	onb(n, t, b);
-	return normalize(t * (sinT * cos(phi)) + b * (sinT * sin(phi)) + n * cosT);
+	vec3 localV = vec3(dot(V, t), dot(V, b), dot(V, n));
+	vec3 Vh = normalize(vec3(a * localV.xy, localV.z));
+	float lensq = dot(Vh.xy, Vh.xy);
+	vec3 T1 = lensq > 0.0 ? vec3(-Vh.y, Vh.x, 0.0) * inversesqrt(lensq) : vec3(1.0, 0.0, 0.0);
+	vec3 T2 = cross(Vh, T1);
+	float r = sqrt(u.x), phi = 2.0 * PI * u.y;
+	float p1 = r * cos(phi), p2 = r * sin(phi);
+	float s = 0.5 * (1.0 + Vh.z);
+	p2 = mix(sqrt(max(0.0, 1.0 - p1 * p1)), p2, s);
+	vec3 Nh = p1 * T1 + p2 * T2 + sqrt(max(0.0, 1.0 - p1 * p1 - p2 * p2)) * Vh;
+	vec3 H = normalize(vec3(a * Nh.xy, max(0.0, Nh.z)));
+	return normalize(t * H.x + b * H.y + n * H.z);
 }
 
 bool bsdfSample(vec3 N, vec3 V, vec3 albedo, float rough, float metal, out vec3 L, out vec3 weight, out float pdf) {
 	float ps = specProb(albedo, metal);
 	float a = max(rough * rough, 1e-4);
 	if (rnd() < ps) {
-		vec3 H = ggxSampleH(N, a, rnd2());
+		vec3 H = ggxSampleH(N, V, a, rnd2());
 		L = reflect(-V, H);
 	} else {
 		L = cosineSample(N, rnd2());
