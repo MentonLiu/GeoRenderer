@@ -1,12 +1,14 @@
-import { BVH_TEXELS, ENV_H, ENV_W, MAT_TEXELS, MAX_ENV_IMAGE_SIZE, TRI_ATTR_TEXELS, TRI_POS_TEXELS } from '../core/config.js';
+import { BVH_TEXELS, ENV_H, ENV_W, MAT_TEXELS, MAX_ENV_IMAGE_SIZE, MAX_RENDER_BUFFER_SIDE, TRI_ATTR_TEXELS, TRI_POS_TEXELS } from '../core/config.js';
 import { clamp, hexToLinear, vCross, vDot, vNorm, vSub } from '../core/math.js';
 import { FS_BLOOM_BLUR, FS_BLOOM_BRIGHT, FS_COMPOSITE, FS_DENOISE, FS_FINAL, FS_PATHTRACE, FS_PATHTRACE_COLOR_ONLY, FS_TONEMAP, VS_FULLSCREEN } from './shaders.js';
-import { createAtlasTexture, createDataTexture, createEnvTexture, createFBO, createProgram, createR32FTexture, createRenderTexture } from './webgl.js';
+import { createAtlasTexture, createDataTexture, createEnvTexture, createProgram, createR32FTexture } from './webgl.js';
+import { RenderBuffers } from './render-buffers.js';
 import { buildBVH } from '../scene/bvh.js';
 import { buildEnvDistribution, generateSkyPixels, resampleEquirect, sunDirection } from '../scene/environment.js';
 import { collectGeometry } from '../scene/geometry.js';
 import { buildMaterials } from '../scene/materials.js';
 import { materialKey } from '../scene/group-overrides.js';
+import { applyEnvironmentCycle, environmentCycle } from '../scene/day-cycle.js';
 
 export class PathTracer {
 	constructor(canvas) {
@@ -26,6 +28,8 @@ export class PathTracer {
 		this.appleGpuOptimization = false;
 		this.colorOnlyPass = false;
 		this.colorOnlyProgramFailed = false;
+		this.renderWindow = null;
+		this.frameSync = null;
 	}
 
 	init() {
@@ -218,7 +222,7 @@ export class PathTracer {
 			const scale = Math.min(1, limit / customImage.width, limit / customImage.height);
 			w = Math.max(1, Math.round(customImage.width * scale));
 			h = Math.max(1, Math.round(customImage.height * scale));
-			pixels = resampleEquirect(customImage, w, h);
+			pixels = applyEnvironmentCycle(resampleEquirect(customImage, w, h), settings);
 		} else {
 			pixels = generateSkyPixels(settings);
 		}
@@ -241,74 +245,49 @@ export class PathTracer {
 		const gl = this.gl;
 		w = Math.max(8, Math.round(w));
 		h = Math.max(8, Math.round(h));
+		const limit = Math.min(MAX_RENDER_BUFFER_SIDE, gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
+		if (!Number.isFinite(w) || !Number.isFinite(h) || w > limit || h > limit) {
+			throw new Error('渲染缓冲超过显存预算，请使用分块渲染');
+		}
 		if (this.width === w && this.height === h && this.buffers) return;
+		// Resizes are infrequent; finish pending work before releasing old allocations.
+		gl.finish();
+		this.clearFrameSync();
+		this.disposeBuffers();
 		this.width = w;
 		this.height = h;
 		this.canvas.width = w;
 		this.canvas.height = h;
-		this.disposeBuffers();
-
-		const mk = () => ({
-			color: createRenderTexture(gl, w, h, gl.RGBA32F),
-			albedo: createRenderTexture(gl, w, h, gl.RGBA16F),
-			normal: createRenderTexture(gl, w, h, gl.RGBA16F),
-			moment: createRenderTexture(gl, w, h, gl.RGBA32F),
-		});
-		const a = mk(), b = mk();
-		this.buffers = {
-			a: a, b: b,
-			fboA: createFBO(gl, [a.color, a.albedo, a.normal, a.moment]),
-			fboB: createFBO(gl, [b.color, b.albedo, b.normal, b.moment]),
-			fboColorA: createFBO(gl, [a.color]),
-			fboColorB: createFBO(gl, [b.color]),
-			d0: createRenderTexture(gl, w, h, gl.RGBA16F),
-			d1: createRenderTexture(gl, w, h, gl.RGBA16F),
-			v0: createRenderTexture(gl, w, h, gl.R32F),
-			v1: createRenderTexture(gl, w, h, gl.R32F),
-			hdr: createRenderTexture(gl, w, h, gl.RGBA16F),
-			bloomA: createRenderTexture(gl, w, h, gl.RGBA16F),
-			bloomB: createRenderTexture(gl, w, h, gl.RGBA16F),
-			tonemapOut: createRenderTexture(gl, w, h, gl.RGBA16F),
-		};
-		this.buffers.fboD0 = createFBO(gl, [this.buffers.d0, this.buffers.v0]);
-		this.buffers.fboD1 = createFBO(gl, [this.buffers.d1, this.buffers.v1]);
-		this.buffers.fboHDR = createFBO(gl, [this.buffers.hdr]);
-		this.buffers.fboBloomA = createFBO(gl, [this.buffers.bloomA]);
-		this.buffers.fboBloomB = createFBO(gl, [this.buffers.bloomB]);
-		this.buffers.fboTonemap = createFBO(gl, [this.buffers.tonemapOut]);
+		this.buffers = new RenderBuffers(gl, w, h);
 		this.ping = 0;
 		this.reset();
 	}
 
 	disposeBuffers() {
-		const gl = this.gl;
-		const b = this.buffers;
-		if (!b || !gl) return;
-		[b.a, b.b].forEach(set => {
-			gl.deleteTexture(set.color);
-			gl.deleteTexture(set.albedo);
-			gl.deleteTexture(set.normal);
-			gl.deleteTexture(set.moment);
-		});
-		gl.deleteTexture(b.d0);
-		gl.deleteTexture(b.d1);
-		gl.deleteTexture(b.hdr);
-		gl.deleteTexture(b.bloomA);
-		gl.deleteTexture(b.bloomB);
-		gl.deleteTexture(b.tonemapOut);
-		gl.deleteFramebuffer(b.fboHDR);
-		gl.deleteFramebuffer(b.fboBloomA);
-		gl.deleteFramebuffer(b.fboBloomB);
-		gl.deleteFramebuffer(b.fboTonemap);
-		gl.deleteTexture(b.v0);
-		gl.deleteTexture(b.v1);
-		gl.deleteFramebuffer(b.fboA);
-		gl.deleteFramebuffer(b.fboB);
-		gl.deleteFramebuffer(b.fboColorA);
-		gl.deleteFramebuffer(b.fboColorB);
-		gl.deleteFramebuffer(b.fboD0);
-		gl.deleteFramebuffer(b.fboD1);
+		this.buffers?.dispose();
 		this.buffers = null;
+	}
+
+	clearFrameSync() {
+		if (this.frameSync) this.gl.deleteSync(this.frameSync);
+		this.frameSync = null;
+	}
+
+	isFrameReady() {
+		if (!this.frameSync) return true;
+		const gl = this.gl;
+		const status = gl.clientWaitSync(this.frameSync, 0, 0);
+		if (status === gl.TIMEOUT_EXPIRED) return false;
+		if (status === gl.WAIT_FAILED) throw new Error('GPU 渲染同步失败');
+		this.clearFrameSync();
+		return true;
+	}
+
+	endFrame() {
+		this.clearFrameSync();
+		this.frameSync = this.gl.fenceSync(this.gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+		if (!this.frameSync) throw new Error('无法同步 GPU 渲染任务');
+		this.gl.flush();
 	}
 
 	reset() {
@@ -356,6 +335,7 @@ export class PathTracer {
 	beginFrame(settings, interactive) {
 		const gl = this.gl;
 		if (!this.buffers || !this.scene || !this.env) return false;
+		if (!this.isFrameReady()) return false;
 		this.appleGpuOptimization = this.useAppleGpuPath(settings);
 		if (this.appleGpuOptimization && interactive && !this.progPTColorOnly && !this.colorOnlyProgramFailed) {
 			try {
@@ -389,7 +369,9 @@ export class PathTracer {
 		this.bindTex(10, this.env.marg, 'uEnvMarg', p);
 		this.bindTex(15, s.atlasEmissive || this.dummy2D, 'uAtlasE', p);
 
-		gl.uniform2f(u.uResolution, this.width, this.height);
+		const frame = this.renderWindow || { width: this.width, height: this.height, x: 0, y: 0 };
+		gl.uniform2f(u.uResolution, frame.width, frame.height);
+		gl.uniform2f(u.uTileOrigin, frame.x, frame.y);
 		gl.uniform1i(u.uMaxBounce, settings.max_bounce | 0);
 		gl.uniform1i(u.uLightSamples, settings.light_samples | 0);
 		gl.uniform1f(u.uClamp, settings.clamp_value);
@@ -414,7 +396,7 @@ export class PathTracer {
 		gl.uniform3f(u.uCamUp, up[0], up[1], up[2]);
 		gl.uniform3f(u.uCamForward, fwd[0], fwd[1], fwd[2]);
 		gl.uniform1f(u.uTanHalfFov, Math.tan(cam.fov * Math.PI / 360));
-		gl.uniform1f(u.uAspect, this.width / this.height);
+		gl.uniform1f(u.uAspect, frame.width / frame.height);
 		gl.uniform1i(u.uOrtho, cam.ortho ? 1 : 0);
 		gl.uniform1f(u.uOrthoHalfHeight, cam.orthoHalfHeight || 20);
 
@@ -434,7 +416,8 @@ export class PathTracer {
 		const bg = hexToLinear(settings.bg_color);
 		gl.uniform3f(u.uBgColor, bg[0], bg[1], bg[2]);
 
-		const sunOn = settings.sun_enable && settings.sun_intensity > 0;
+		const cycle = environmentCycle(settings);
+		const sunOn = settings.sun_enable && settings.sun_intensity > 0 && cycle.sunStrength > 0;
 		gl.uniform1i(u.uSunEnable, sunOn ? 1 : 0);
 		if (sunOn) {
 			const dir = sunDirection(settings);
@@ -442,11 +425,11 @@ export class PathTracer {
 			const cosR = Math.cos(radius);
 			const solid = Math.max(2 * Math.PI * (1 - cosR), 1e-7);
 			const col = hexToLinear(settings.sun_color);
-			const scale = settings.sun_intensity / solid;
+			const scale = settings.sun_intensity * cycle.sunStrength / solid;
 			gl.uniform3f(u.uSunDir, dir[0], dir[1], dir[2]);
 			gl.uniform1f(u.uSunCosRadius, cosR);
 			gl.uniform1f(u.uSunSolidAngle, solid);
-			gl.uniform3f(u.uSunRadiance, col[0] * scale, col[1] * scale, col[2] * scale);
+			gl.uniform3f(u.uSunRadiance, col[0] * scale * cycle.sunTint[0], col[1] * scale * cycle.sunTint[1], col[2] * scale * cycle.sunTint[2]);
 		} else {
 			gl.uniform3f(u.uSunDir, 0, 1, 0);
 			gl.uniform1f(u.uSunCosRadius, 2);
@@ -457,7 +440,7 @@ export class PathTracer {
 		gl.uniform1i(u.uGroundOn, settings.ground_on && !s.sceneTriCount ? 1 : 0);
 		const fog = s.fog;
 		gl.uniform1i(u.uFogMode, fog ? (fog.isFogExp2 ? 2 : 1) : 0);
-		gl.uniform3f(u.uFogColor, fog?.color?.r || 0, fog?.color?.g || 0, fog?.color?.b || 0);
+		gl.uniform3f(u.uFogColor, (fog?.color?.r || 0) * cycle.brightness * cycle.tint[0], (fog?.color?.g || 0) * cycle.brightness * cycle.tint[1], (fog?.color?.b || 0) * cycle.brightness * cycle.tint[2]);
 		gl.uniform1f(u.uFogNear, fog?.near || 0);
 		gl.uniform1f(u.uFogFar, fog?.far || 1);
 		gl.uniform1f(u.uFogDensity, fog?.density || 0);
@@ -518,7 +501,8 @@ export class PathTracer {
 		gl.bindVertexArray(this.vao);
 
 		let denoised = null;
-		const useDenoise = settings.denoise && !this.colorOnlyPass && this.spp < 4096 && settings.denoise_strength > 0;
+		const useDenoise = settings.denoise && !this.colorOnlyPass && settings.denoise_strength > 0;
+		this.buffers.syncEffects(useDenoise, !!settings.bloom_enable);
 
 		if (useDenoise) {
 			const p = this.progDN;
@@ -579,7 +563,7 @@ export class PathTracer {
 				gl.uniform1f(p.uniforms.uThreshold, settings.bloom_threshold);
 				gl.drawArrays(gl.TRIANGLES, 0, 3);
 			}
-			const radius = Math.max(settings.bloom_radius, 0.1) * (this.width / 1280);
+			const radius = Math.max(settings.bloom_radius, 0.1) * ((this.renderWindow?.width || this.width) / 1280);
 			{
 				const p = this.progBL;
 				gl.useProgram(p.program);
@@ -610,7 +594,8 @@ export class PathTracer {
 			gl.uniform1i(p.uniforms.uToneMap, tmMap[settings.tone_mapping] != null ? tmMap[settings.tone_mapping] : 2);
 			gl.uniform1i(p.uniforms.uVignetteEnable, settings.vignette_enable ? 1 : 0);
 			gl.uniform1f(p.uniforms.uVignetteStrength, settings.vignette_strength);
-			gl.uniform2f(p.uniforms.uResolution, this.width, this.height);
+			gl.uniform2f(p.uniforms.uResolution, this.renderWindow?.width || this.width, this.renderWindow?.height || this.height);
+			gl.uniform2f(p.uniforms.uTileOrigin, this.renderWindow?.x || 0, this.renderWindow?.y || 0);
 			gl.drawArrays(gl.TRIANGLES, 0, 3);
 		}
 
@@ -620,6 +605,7 @@ export class PathTracer {
 			const p = this.progFN;
 			gl.useProgram(p.program);
 			this.bindTex(0, buf.tonemapOut, 'uTex', p);
+			gl.uniform2f(p.uniforms.uTileOrigin, this.renderWindow?.x || 0, this.renderWindow?.y || 0);
 			gl.uniform1i(p.uniforms.uSharpenEnable, settings.sharpen_enable ? 1 : 0);
 			gl.uniform1f(p.uniforms.uSharpenStrength, settings.sharpen_strength);
 			gl.uniform1i(p.uniforms.uGrainEnable, settings.grain_enable ? 1 : 0);
@@ -635,6 +621,7 @@ export class PathTracer {
 		this.disposed = true;
 		const gl = this.gl;
 		if (!gl) return;
+		this.clearFrameSync();
 		this.disposeScene();
 		this.disposeBuffers();
 		if (this.env) {

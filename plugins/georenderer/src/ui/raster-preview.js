@@ -5,6 +5,7 @@ import { syncControls } from './controls.js';
 import { PTR, saveSettings } from './state.js';
 import { RasterMaterials } from './raster-materials.js';
 import { RasterEnvironment } from './raster-environment.js';
+import { environmentCycle } from '../scene/day-cycle.js';
 
 // Camera setup uses a lightweight preview before path-tracing buffers exist.
 export class RasterPreview {
@@ -48,6 +49,7 @@ export class RasterPreview {
 		this.model.clear();
 		this.materials?.dispose();
 		this.materials = new RasterMaterials(PTR.settings, PTR.overrides, PTR.groupOverrides);
+		this.previewModelKey = '';
 		this.ownedMaterials = this.materials.materials;
 		if (typeof Canvas !== 'undefined' && Canvas.scene) Canvas.scene.updateMatrixWorld(true);
 		const elements = (typeof Outliner !== 'undefined' && Outliner.elements) || [];
@@ -135,8 +137,15 @@ export class RasterPreview {
 		}).join('|');
 		if (key !== this.previewModelKey) {
 			this.previewModels.clear();
+			this.previewMaterials?.dispose();
+			this.previewMaterials = new RasterMaterials(PTR.settings, {}, {});
 			this.previewModelSources = models.map(model => {
 				const clone = model.model_3d.clone(true);
+				clone.traverse(object => {
+					if (!object.isMesh || !object.material) return;
+					const customize = source => this.previewMaterials.createPreview(source);
+					object.material = Array.isArray(object.material) ? object.material.map(customize) : customize(object.material);
+				});
 				clone.matrixAutoUpdate = false;
 				this.previewModels.add(clone);
 				return { source: model.model_3d, clone };
@@ -161,9 +170,9 @@ export class RasterPreview {
 			this.renderer.setSize(width, height, false);
 		}
 		const settings = PTR.settings;
-		this.renderer.toneMapping = { none: THREE.NoToneMapping, reinhard: THREE.ReinhardToneMapping, filmic: THREE.CineonToneMapping }[settings.tone_mapping] ?? THREE.ACESFilmicToneMapping;
+		const toneMaps = { none: THREE.NoToneMapping, reinhard: THREE.ReinhardToneMapping, aces: THREE.ACESFilmicToneMapping, filmic: THREE.CineonToneMapping, agx: THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping };
+		this.renderer.toneMapping = toneMaps[settings.tone_mapping] ?? THREE.ACESFilmicToneMapping;
 		this.renderer.toneMappingExposure = settings.exposure;
-		for (const material of this.ownedMaterials) material.envMapIntensity = settings.env_intensity;
 		if (settings.auto_sync && PTR.step === 'camera' && PTR.cam.syncFromPreview()) {
 			if (settings.fov !== PTR.cam.fov || settings.ortho !== PTR.cam.ortho || settings.camera_distance !== PTR.cam.distance) {
 				settings.fov = PTR.cam.fov;
@@ -196,6 +205,7 @@ export class RasterPreview {
 		this.activeCamera = target;
 		this.previewModels.visible = PTR.step !== 'materials';
 		const previewModels = this.previewModels.visible ? this.syncPreviewModels() : [];
+		for (const material of [...this.materials.materials, ...(this.previewMaterials?.materials || []), this.floor.material]) material.envMapIntensity = Math.max(0, settings.env_intensity);
 		this.grid.visible = PTR.step === 'materials';
 		const hasSceneGeometry = blockbenchScene?.preview_models?.some(model => previewModels.includes(model));
 		const showGround = !this.grid.visible && !hasSceneGeometry;
@@ -213,15 +223,18 @@ export class RasterPreview {
 			const repeat = 2000 / Math.max(0.01, settings.ground_texture_scale || 1);
 			this.groundMap.repeat.set(repeat, repeat);
 		}
-		const daylight = Math.max(0.1, Math.min(1, (Math.sin((settings.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
-		this.ambient.intensity = 0.2 + daylight * Math.max(0, settings.env_intensity);
+		const cycle = environmentCycle(settings);
+		this.ambient.intensity = 0.15 * cycle.brightness * Math.max(0, settings.env_intensity);
 		this.ambient.color.copy(backgroundScene?.light_color || new THREE.Color(0xffffff));
-		this.sun.visible = !!settings.sun_enable;
+		this.ambient.color.multiply(new THREE.Color().setRGB(...cycle.tint));
+		this.sun.visible = !!settings.sun_enable && cycle.sunStrength > 0;
 		const dir = sunDirection(settings);
 		this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
-		this.sun.intensity = Math.max(0, settings.sun_intensity / 4);
+		this.sun.intensity = Math.max(0, settings.sun_intensity / 4) * cycle.sunStrength;
 		this.sun.color.set(settings.sun_color);
-		this.scene.fog = backgroundScene?.fog || null;
+		this.sun.color.multiply(new THREE.Color().setRGB(...cycle.sunTint));
+		this.scene.fog = backgroundScene?.fog?.clone() || null;
+		if (this.scene.fog) this.scene.fog.color.multiply(new THREE.Color().setRGB(...cycle.tint).multiplyScalar(cycle.brightness));
 		this.scene.environment = this.environment.sync(settings, PTR.customEnv);
 		this.scene.background = this.grid.visible ? new THREE.Color('#20242b') : settings.bg_mode === 'transparent' ? null
 			: settings.bg_mode === 'color' ? new THREE.Color(settings.bg_color) : this.environment.background;
@@ -243,9 +256,12 @@ export class RasterPreview {
 		this.running = false;
 		cancelAnimationFrame(this.raf);
 		this.raf = 0;
+		this.scene.environment = this.scene.background = null;
+		this.environment.release();
 	}
 
 	dispose() {
+		this.previewMaterials?.dispose();
 		this.stop();
 		this.highlightGroup(null);
 		this.model.clear();

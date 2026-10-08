@@ -25,7 +25,9 @@
 }
 #ptr_raster_canvas { position: absolute; inset: 0; }
 #ptr_frame[data-step="materials"] #ptr_raster_canvas:not(.dragging) { cursor: pointer; }
-#ptr_canvas { position: absolute; inset: 0; }
+#ptr_canvas, #ptr_final_canvas { position: absolute; inset: 0; }
+#ptr_final_canvas { cursor: default !important; }
+#ptr_frame[data-texture-filter="nearest"] #ptr_canvas { image-rendering: pixelated; }
 #ptr_frame[data-step="preview"] #ptr_canvas,
 #ptr_frame[data-step="export"] #ptr_canvas { cursor: default; }
 #ptr_viewport canvas.dragging { cursor: grabbing; }

@@ -95,10 +95,16 @@ export function createEnvTexture(gl, data, w, h, mipmaps = false) {
 
 export function createRenderTexture(gl, w, h, internalFormat) {
 	const tex = gl.createTexture();
+	if (!tex) throw new Error('GPU 无法分配渲染纹理');
 	gl.bindTexture(gl.TEXTURE_2D, tex);
 	const fmt = internalFormat || gl.RGBA32F;
 	const uploadFormat = fmt === gl.R32F ? gl.RED : gl.RGBA;
-	gl.texImage2D(gl.TEXTURE_2D, 0, fmt, w, h, 0, uploadFormat, gl.FLOAT, null);
+	gl.texImage2D(gl.TEXTURE_2D, 0, fmt, w, h, 0, uploadFormat, fmt === gl.RGBA8 ? gl.UNSIGNED_BYTE : gl.FLOAT, null);
+	const error = gl.getError();
+	if (error !== gl.NO_ERROR) {
+		gl.deleteTexture(tex);
+		throw new Error('GPU 渲染缓冲分配失败（0x' + error.toString(16) + '），请降低预览比例或输出尺寸');
+	}
 	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
 	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -109,6 +115,7 @@ export function createRenderTexture(gl, w, h, internalFormat) {
 
 export function createFBO(gl, attachments) {
 	const fbo = gl.createFramebuffer();
+	if (!fbo) throw new Error('GPU 无法分配渲染帧缓冲');
 	gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
 	const bufs = [];
 	attachments.forEach((tex, i) => {
@@ -119,6 +126,7 @@ export function createFBO(gl, attachments) {
 	const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
 	gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 	if (status !== gl.FRAMEBUFFER_COMPLETE) {
+		gl.deleteFramebuffer(fbo);
 		throw new Error('Framebuffer incomplete: 0x' + status.toString(16));
 	}
 	return fbo;

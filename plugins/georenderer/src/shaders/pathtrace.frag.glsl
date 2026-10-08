@@ -22,6 +22,7 @@ precision highp sampler2D;
 #define MF_FORCE_METALNESS 2048
 
 uniform vec2 uResolution;
+uniform vec2 uTileOrigin;
 uniform int  uSeed;
 uniform int  uMaxBounce;
 uniform int  uLightSamples;
@@ -257,7 +258,7 @@ struct Surface {
 	vec2 uv;
 	vec3 albedo;
 	float alpha, rough, metal, transm, ior, cutoff;
-	int amode;
+	int amode, materialId;
 	vec3 emission;
 	bool isLight;
 };
@@ -355,6 +356,7 @@ Surface getSurface(Hit hit, vec3 ro, vec3 rd) {
 	s.alpha = 1.0;
 	s.amode = 0;
 	s.emission = vec3(0.0);
+	s.materialId = -1;
 
 	if (hit.tri == -2) {
 		s.ng = vec3(0.0, 1.0, 0.0);
@@ -396,6 +398,7 @@ Surface getSurface(Hit hit, vec3 ro, vec3 rd) {
 	s.ns = sn;
 
 	int matId = int(fTri(i * 3 + 0).w + 0.5);
+	s.materialId = matId;
 	Mat m = loadMat(matId);
 	bool rep = (m.flags & MF_WRAP_REPEAT) != 0;
 
@@ -757,7 +760,7 @@ float shadowCatcherAlpha(vec3 p, vec3 n) {
 	return clamp(1.0 - vis / full, 0.0, 1.0);
 }
 
-vec3 tracePath(vec3 ro, vec3 rd, out float alphaOut, out vec3 gAlbedo, out vec3 gNormal, out float gDepth) {
+vec3 tracePath(vec3 ro, vec3 rd, out float alphaOut, out vec3 gAlbedo, out vec3 gNormal, out float gDepth, out float gRoughness, out float gMaterial) {
 	vec3 radiance = vec3(0.0);
 	vec3 beta = vec3(1.0);
 	float lastPdf = 0.0;
@@ -766,6 +769,8 @@ vec3 tracePath(vec3 ro, vec3 rd, out float alphaOut, out vec3 gAlbedo, out vec3 
 	gAlbedo = vec3(0.0);
 	gNormal = vec3(0.0);
 	gDepth = 1.0e6;
+	gRoughness = 1.0;
+	gMaterial = 0.0;
 	bool gWritten = false;
 	int bounce = 0;
 	vec3 prevPos = ro;
@@ -825,6 +830,8 @@ vec3 tracePath(vec3 ro, vec3 rd, out float alphaOut, out vec3 gAlbedo, out vec3 
 			gAlbedo = s.albedo;
 			gNormal = s.ns;
 			gDepth = hit.t;
+			gRoughness = s.rough;
+			gMaterial = float(s.materialId + 2);
 			gWritten = true;
 		}
 
@@ -936,13 +943,14 @@ vec3 tracePath(vec3 ro, vec3 rd, out float alphaOut, out vec3 gAlbedo, out vec3 
 
 void main() {
 	ivec2 px = ivec2(gl_FragCoord.xy);
-	g_rng = uint(px.x) * 1973u + uint(px.y) * 9277u + uint(uSeed) * 26699u;
+	ivec2 imagePx = px + ivec2(uTileOrigin);
+	g_rng = uint(imagePx.x) * 1973u + uint(imagePx.y) * 9277u + uint(uSeed) * 26699u;
 	g_rng = g_rng | 1u;
 	pcgNext();
 	pcgNext();
 
 	vec2 jitter = rnd2();
-	vec2 ndc = ((gl_FragCoord.xy - 0.5 + jitter) / uResolution) * 2.0 - 1.0;
+	vec2 ndc = ((gl_FragCoord.xy + uTileOrigin - 0.5 + jitter) / uResolution) * 2.0 - 1.0;
 
 	vec3 ro, rd;
 	if (uOrtho == 1) {
@@ -960,9 +968,9 @@ void main() {
 		}
 	}
 
-	float alpha, depth;
+	float alpha, depth, roughness, material;
 	vec3 alb, nrm;
-	vec3 c = tracePath(ro, rd, alpha, alb, nrm, depth);
+	vec3 c = tracePath(ro, rd, alpha, alb, nrm, depth, roughness, material);
 	if (uFogMode != 0 && depth < 1.0e6 && alpha > 0.0) {
 		float fog = uFogMode == 1
 			? clamp((depth - uFogNear) / max(uFogFar - uFogNear, 1.0e-6), 0.0, 1.0)
@@ -991,8 +999,8 @@ void main() {
 	}
 	outColor = prev + vec4(c, alpha);
 #ifndef PTR_COLOR_ONLY
-	outAlbedo = prevA + vec4(alb, 1.0);
-	outNormal = prevN + vec4(nrm, 1.0);
+	outAlbedo = prevA + vec4(alb, roughness);
+	outNormal = prevN + vec4(nrm, material);
 	outMoment = prevM + vec4(l, l * l, depth, 1.0);
 #endif
 }

@@ -123,7 +123,14 @@ function onSettingChanged(key) {
 	const t = PTR.tracer;
 	if (!t) return;
 	if (!PTR.open) { PTR.needsRebuild = true; return; }
-	if (kind === 'post') { t.present(PTR.settings); updateStatus(); return; }
+	if (kind === 'post') {
+		PTR.needsPresent = true;
+		try {
+			if (t.isFrameReady()) { t.present(PTR.settings); t.endFrame(); PTR.needsPresent = false; }
+		} catch (err) { showError(err); PTR.paused = true; }
+		updateStatus();
+		return;
+	}
 	if (kind === 'resize') { applyResolution(); return; }
 	if (kind === 'env') {
 		try { t.setEnvironment(PTR.settings, PTR.customEnv); } catch (err) { showError(err); return; }

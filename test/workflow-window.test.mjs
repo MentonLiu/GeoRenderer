@@ -35,6 +35,7 @@ test('returning from camera setup resumes rendering and updates the pause button
 	PTR.settings = { ...PTR.settings, res_mode: 'custom', res_width: 320, res_height: 240, preview_scale: 0.5 };
 	PTR.raster = { start() {}, stop() {} };
 	PTR.tracer = {
+		gl: { getParameter: () => 8192 },
 		width: 160, height: 120, spp: 0, env: null, scene: {},
 		setCamera() {}, setEnvironment() {}, resize() {}, reset() {},
 		buildScene() { return this.scene; },

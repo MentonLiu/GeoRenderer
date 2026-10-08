@@ -12,6 +12,7 @@ uniform int   uToneMap;
 uniform int   uVignetteEnable;
 uniform float uVignetteStrength;
 uniform vec2  uResolution;
+uniform vec2  uTileOrigin;
 
 out vec4 fragColor;
 
@@ -73,7 +74,7 @@ void main() {
 	color = clamp((color - 0.5) * uContrast + 0.5, 0.0, 1.0);
 
 	if (uVignetteEnable == 1) {
-		vec2 uv = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
+		vec2 uv = ((gl_FragCoord.xy + uTileOrigin) / uResolution) * 2.0 - 1.0;
 		float d = clamp(dot(uv, uv) * 0.5, 0.0, 1.0);
 		color *= clamp(1.0 - uVignetteStrength * d, 0.0, 1.0);
 	}

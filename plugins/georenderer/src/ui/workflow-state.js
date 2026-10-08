@@ -26,11 +26,12 @@ export function canNavigatePreview(id) {
 	return isInspectionStep(id) || canMoveCamera(id);
 }
 
-export function canExport(step, finalStarted, spp, finalSamples) {
-	return step === 'export' && !!finalStarted && spp >= Math.max(1, finalSamples);
+export function canExport(step, finalStarted, spp, finalSamples, completed = true) {
+	return step === 'export' && !!finalStarted && completed && spp >= Math.max(1, finalSamples);
 }
 
 export function validateFinalSize(width, height, maxTextureSize) {
+	if (!Number.isInteger(width) || !Number.isInteger(height) || width < 8 || height < 8) return '最终尺寸必须是至少 8 像素的整数';
 	if (width > maxTextureSize || height > maxTextureSize) return '最终尺寸超过当前 GPU 的纹理上限';
 	if (width * height > 16_777_216) return '最终画面超过 1600 万像素，请降低宽度或高度';
 	return null;

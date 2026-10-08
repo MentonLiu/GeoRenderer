@@ -12,7 +12,7 @@ export function buildExportPanel() {
 			rowNumber('成片采样数', 'final_samples', 1, 100000, 1),
 		]),
 		card('渲染与输出', 'save_alt', [
-			el('div', { class: 'ptr_note', text: '左侧保留当前预览。确认后点击下方“开始最终渲染”；达到目标采样数后可复制图片、另存 PNG，或交给 Blockbench 截图面板。' }),
+			el('div', { class: 'ptr_note', text: '左侧保留当前预览。确认后点击下方“开始最终渲染”；图片分块完成并保留设定尺寸。达到目标采样数后可复制图片、另存 PNG，或交给 Blockbench 截图面板。' }),
 		]),
 	];
 }
