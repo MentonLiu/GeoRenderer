@@ -1,8 +1,10 @@
 import { sunDirection } from '../scene/environment.js';
-import { groupChainForElement, resolveMaterialOverride } from '../scene/group-overrides.js';
+import { groupChainForElement } from '../scene/group-overrides.js';
 import { activeBlockbenchPreviewModels, activeBlockbenchScene } from '../scene/blockbench-scene.js';
 import { syncControls } from './controls.js';
 import { PTR, saveSettings } from './state.js';
+import { RasterMaterials } from './raster-materials.js';
+import { RasterEnvironment } from './raster-environment.js';
 
 // Camera setup uses a lightweight preview before path-tracing buffers exist.
 export class RasterPreview {
@@ -10,6 +12,8 @@ export class RasterPreview {
 		this.canvas = canvas;
 		this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
 		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+		this.renderer.outputEncoding = THREE.sRGBEncoding;
+		this.environment = new RasterEnvironment(this.renderer);
 		this.scene = new THREE.Scene();
 		this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000);
 		this.orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100000);
@@ -42,8 +46,9 @@ export class RasterPreview {
 
 	refreshModel() {
 		this.model.clear();
-		for (const material of this.ownedMaterials) material.dispose();
-		this.ownedMaterials = [];
+		this.materials?.dispose();
+		this.materials = new RasterMaterials(PTR.settings, PTR.overrides, PTR.groupOverrides);
+		this.ownedMaterials = this.materials.materials;
 		if (typeof Canvas !== 'undefined' && Canvas.scene) Canvas.scene.updateMatrixWorld(true);
 		const elements = (typeof Outliner !== 'undefined' && Outliner.elements) || [];
 		for (const element of elements) {
@@ -53,29 +58,11 @@ export class RasterPreview {
 			clone.userData.georendererSourceMesh = mesh;
 			const groupChain = groupChainForElement(element);
 			clone.traverse(object => { object.userData.georendererGroupChain = groupChain; });
-			const override = resolveMaterialOverride(null, groupChain, null, PTR.groupOverrides);
-			if (Object.keys(override).length) {
-				clone.traverse(object => {
-					if (!object.isMesh || !object.material) return;
-					const customize = material => {
-						const copy = material.clone();
-						// ShaderMaterial.clone() also clones texture uniforms without
-						// marking them for upload. Keep Blockbench's managed textures.
-						for (const [key, uniform] of Object.entries(material.uniforms || {})) {
-							if (uniform.value?.isTexture && copy.uniforms?.[key]) copy.uniforms[key].value = uniform.value;
-						}
-						if (override.roughness != null && 'roughness' in copy) copy.roughness = override.roughness;
-						if (override.metalness != null && 'metalness' in copy) copy.metalness = override.metalness;
-						if (override.emissive != null && copy.emissive) {
-							copy.emissive.set(override.emissive_color || '#ffffff');
-							copy.emissiveIntensity = override.emissive;
-						}
-						this.ownedMaterials.push(copy);
-						return copy;
-					};
-					object.material = Array.isArray(object.material) ? object.material.map(customize) : customize(object.material);
-				});
-			}
+			clone.traverse(object => {
+				if (!object.isMesh || !object.material) return;
+				const customize = material => this.materials.create(material, groupChain);
+				object.material = Array.isArray(object.material) ? object.material.map(customize) : customize(object.material);
+			});
 			clone.matrix.copy(mesh.matrixWorld);
 			clone.matrixAutoUpdate = false;
 			this.model.add(clone);
@@ -174,6 +161,9 @@ export class RasterPreview {
 			this.renderer.setSize(width, height, false);
 		}
 		const settings = PTR.settings;
+		this.renderer.toneMapping = { none: THREE.NoToneMapping, reinhard: THREE.ReinhardToneMapping, filmic: THREE.CineonToneMapping }[settings.tone_mapping] ?? THREE.ACESFilmicToneMapping;
+		this.renderer.toneMappingExposure = settings.exposure;
+		for (const material of this.ownedMaterials) material.envMapIntensity = settings.env_intensity;
 		if (settings.auto_sync && PTR.step === 'camera' && PTR.cam.syncFromPreview()) {
 			if (settings.fov !== PTR.cam.fov || settings.ortho !== PTR.cam.ortho || settings.camera_distance !== PTR.cam.distance) {
 				settings.fov = PTR.cam.fov;
@@ -231,7 +221,7 @@ export class RasterPreview {
 		this.sun.intensity = Math.max(0, settings.sun_intensity / 4);
 		this.sun.color.set(settings.sun_color);
 		this.scene.fog = blockbenchScene?.fog || null;
-		this.scene.environment = blockbenchScene?.cubemap || null;
+		this.scene.environment = this.environment.sync(settings, PTR.customEnv);
 		this.scene.background = this.grid.visible ? new THREE.Color('#20242b') : settings.bg_mode === 'transparent' ? null
 			: blockbenchScene?.cubemap && settings.bg_mode === 'env'
 			? blockbenchScene.cubemap
@@ -262,8 +252,9 @@ export class RasterPreview {
 		this.model.clear();
 		this.previewModels.clear();
 		this.previewModelSources = [];
-		for (const material of this.ownedMaterials) material.dispose();
+		this.materials?.dispose();
 		this.ownedMaterials = [];
+		this.environment.dispose();
 		this.floor.geometry.dispose();
 		this.groundDisk.geometry.dispose();
 		this.floor.material.dispose();

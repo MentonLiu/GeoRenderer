@@ -3,7 +3,7 @@ import { groupChainForElement, resolveMaterialOverride } from '../scene/group-ov
 import { el } from './dom.js';
 import { makeRow } from './controls.js';
 import { rebuildScene } from './render-loop.js';
-import { PTR, saveSettings } from './state.js';
+import { PTR, refreshRasterMaterials, saveSettings } from './state.js';
 
 function groups() {
 	return (typeof Group !== 'undefined' && Group.all) || [];
@@ -50,8 +50,7 @@ function changed(group, reset) {
 	const row = PTR.nodes.groupList?.querySelector(`[data-group-uuid="${group.uuid}"]`);
 	if (row) row.classList.add('modified');
 	saveSettings();
-	clearTimeout(PTR.rasterRefreshTimer);
-	if (PTR.raster) PTR.rasterRefreshTimer = setTimeout(() => PTR.raster?.refreshModel(), 60);
+	refreshRasterMaterials();
 	if (PTR.tracer) {
 		clearTimeout(PTR.rebuildTimer);
 		PTR.rebuildTimer = setTimeout(rebuildScene, 180);

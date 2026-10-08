@@ -98,3 +98,8 @@ export function saveSettings() {
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 	} catch (err) { }
 }
+
+export function refreshRasterMaterials() {
+	clearTimeout(PTR.rasterRefreshTimer);
+	if (PTR.raster) PTR.rasterRefreshTimer = setTimeout(() => PTR.raster?.refreshModel(), 60);
+}
