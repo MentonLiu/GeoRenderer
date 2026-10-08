@@ -1,4 +1,4 @@
-	const CSS = `
+
 #ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }
 #ptr_root * { box-sizing: border-box; }
 #ptr_viewport {
@@ -116,5 +116,3 @@
 }
 .ptr_mat > .ptr_mat_head { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 3px; font-weight: 600; }
 .ptr_mat > .ptr_mat_head img { width: 20px; height: 20px; image-rendering: pixelated; background: #0006; border-radius: 3px; }
-`;
-

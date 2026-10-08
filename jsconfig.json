@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "checkJs": false,
+    "types": ["blockbench-types"],
+    "lib": ["DOM", "ES2020"]
+  },
+  "include": ["plugins/georenderer/src/**/*.js"]
+}
