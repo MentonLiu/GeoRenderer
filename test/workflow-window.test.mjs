@@ -54,14 +54,24 @@ test('returning from camera setup resumes rendering and updates the pause button
 	};
 
 	setStep('camera');
-	assert.equal(PTR.open, true);
-	assert.equal(PTR.paused, false);
-	assert.equal(PTR.nodes.canvas.style.display, 'block');
-	assert.equal(PTR.nodes.rasterCanvas.style.display, 'block');
+	assert.equal(PTR.open, false);
 	setStep('preview');
 	assert.equal(PTR.open, true);
 	assert.equal(PTR.paused, false);
 	assert.equal(PTR.nodes.btnPauseIcon.textContent, 'pause');
 	assert.equal(PTR.nodes.btnPauseLabel.textContent, '暂停');
-	assert.equal(PTR.nodes.rasterCanvas.style.display, 'none');
+	for (const step of ['materials', 'scene', 'camera']) {
+		setStep(step);
+		assert.equal(PTR.open, false, `${step} must not run the path tracer`);
+		assert.equal(PTR.nodes.canvas.style.display, 'none');
+		assert.equal(PTR.nodes.rasterCanvas.style.display, 'block');
+		assert.equal(PTR.nodes.overlay.style.display, 'none');
+		assert.equal(PTR.nodes.footer.style.display, 'none');
+	}
+	PTR.tracer = null;
+	for (const step of ['materials', 'scene', 'camera']) {
+		setStep(step);
+		assert.equal(PTR.tracer, null, `${step} must not initialize a path tracer`);
+		assert.equal(PTR.open, false);
+	}
 });

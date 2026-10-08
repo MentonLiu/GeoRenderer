@@ -5,16 +5,16 @@ import { el } from './dom.js';
 import { copyImage, openBlockbenchScreenshot, saveImage } from './io.js';
 import { buildMaterialList } from './material-panel.js';
 import { selectGroup } from './group-panel.js';
-import { applyResolution, closeRenderer, loop, rebuildScene, resumeRenderer, setInteracting, showError, updateStatus } from './render-loop.js';
+import { applyResolution, closeRenderer, loop, pauseRenderer, rebuildScene, resumeRenderer, setInteracting, showError, updateStatus } from './render-loop.js';
 import { exportSettingsToClipboard, importSettingsFromClipboard, resetToDefaults } from './settings-actions.js';
 import { buildSidebar, syncBlockbenchScene } from './sidebar.js';
 import { PTR, saveSettings } from './state.js';
 import { RasterPreview } from './raster-preview.js';
 import { OrbitCam } from './orbit-camera.js';
 import { applyTimeOfDay, formatClock } from '../scene/presets.js';
-import { STEPS, canExport, canMoveCamera, canNavigatePreview, isInspectionStep, isTraceStep, resolveRenderCamera, resolveRenderSize, stepIndex, validateFinalSize } from './workflow-state.js';
+import { STEPS, canExport, canMoveCamera, canNavigatePreview, isInspectionStep, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from './workflow-state.js';
 import { updateExportSummary } from './export-panel.js';
-import { activeBlockbenchScene, restoreBlockbenchPreviewModelOverrides, restoreBlockbenchSceneSelection } from '../scene/blockbench-scene.js';
+import { restoreBlockbenchPreviewModelOverrides, restoreBlockbenchSceneSelection } from '../scene/blockbench-scene.js';
 
 function attachViewportEvents(canvas) {
 	let dragging = 0;
@@ -25,7 +25,7 @@ function attachViewportEvents(canvas) {
 	const endDrag = () => {
 		dragging = 0;
 		canvas.classList.remove('dragging');
-		if (canNavigatePreview(PTR.step)) {
+		if (canMoveCamera(PTR.step)) {
 			clearTimeout(PTR.interactTimer);
 			PTR.interactTimer = setTimeout(() => setInteracting(false), 200);
 		}
@@ -43,7 +43,7 @@ function attachViewportEvents(canvas) {
 		if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) moved = true;
 		if (!moved) return;
 		canvas.classList.add('dragging');
-		if (canNavigatePreview(PTR.step)) {
+		if (canMoveCamera(PTR.step)) {
 			clearTimeout(PTR.interactTimer);
 			setInteracting(true);
 		}
@@ -53,7 +53,7 @@ function attachViewportEvents(canvas) {
 		const camera = activeCamera();
 		if (dragging === 1) camera.orbit(dx, dy);
 		else camera.pan(dx / Math.max(canvas.clientWidth, 1), dy / Math.max(canvas.clientHeight, 1), 1);
-		if (PTR.tracer) PTR.tracer.reset();
+		if (canMoveCamera(PTR.step) && PTR.tracer) PTR.tracer.reset();
 	});
 	canvas.addEventListener('pointerup', e => {
 		if (dragging && !moved && PTR.step === 'materials' && e.button === 0) {
@@ -75,7 +75,7 @@ function attachViewportEvents(canvas) {
 			syncControls();
 			saveSettings();
 		}
-		if (canNavigatePreview(PTR.step)) {
+		if (canMoveCamera(PTR.step)) {
 			clearTimeout(PTR.interactTimer);
 			setInteracting(true);
 			PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
@@ -237,7 +237,6 @@ function initializeCamera() {
 function ensureRasterPreview() {
 	if (PTR.raster) return;
 	PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
-	PTR.raster.overlayOnly = true;
 	PTR.raster.setGroundTexture(((typeof Texture !== 'undefined' && Texture.all) || []).find(texture => texture.uuid === PTR.settings.ground_texture_uuid));
 }
 
@@ -252,7 +251,6 @@ function updateExportActions() {
 
 export function setStep(id) {
 	if (stepIndex(id) < 0 || !PTR.dialog) return;
-	const previousStep = PTR.step;
 	const wasTrace = isTraceStep(PTR.step);
 	const trace = isTraceStep(id);
 	if (id === 'camera' || trace) initializeCamera();
@@ -268,33 +266,44 @@ export function setStep(id) {
 		PTR.nodes.navButtons[step.id].setAttribute('aria-current', active ? 'step' : 'false');
 		PTR.nodes.stagePanes[step.id].hidden = !active;
 	}
-	PTR.nodes.canvas.style.display = 'block';
+	PTR.nodes.canvas.style.display = trace ? 'block' : 'none';
 	PTR.nodes.rasterCanvas.style.display = trace ? 'none' : 'block';
-	PTR.nodes.overlay.style.display = '';
+	PTR.nodes.overlay.style.display = trace ? '' : 'none';
 	PTR.nodes.watermark.style.display = trace ? '' : 'none';
-	PTR.nodes.footer.style.display = 'flex';
+	PTR.nodes.footer.style.display = trace ? 'flex' : 'none';
 	PTR.nodes.btnStart.style.display = id === 'export' ? '' : 'none';
 	PTR.nodes.btnSave.style.display = id === 'export' ? '' : 'none';
 	PTR.nodes.btnCopy.style.display = id === 'export' ? '' : 'none';
 	PTR.nodes.btnBlockbench.style.display = id === 'export' ? '' : 'none';
-	PTR.nodes.btnPause.style.display = id !== 'export' || PTR.finalStarted ? '' : 'none';
-	PTR.nodes.toolGroup.style.display = id !== 'export' ? 'flex' : 'none';
-	if (trace) PTR.raster?.stop();
-	else PTR.raster?.start();
-	fitFrame();
-	if (id !== 'export' || !PTR.finalStarted) {
-		PTR.settings.render_mode = 'preview';
-		PTR.finalStarted = false;
-	}
-	if (!PTR.tracer) {
-		try { startRenderer(); } catch (err) { showError(err); }
+	PTR.nodes.btnPause.style.display = id === 'preview' || PTR.finalStarted ? '' : 'none';
+	PTR.nodes.toolGroup.style.display = id === 'preview' ? 'flex' : 'none';
+	if (trace) {
+		if (PTR.raster) PTR.raster.stop();
+		if (!PTR.tracer) {
+			PTR.settings.render_mode = 'preview';
+			PTR.finalStarted = false;
+			try { startRenderer(); } catch (err) { showError(err); }
+		} else {
+			if (!wasTrace) PTR.tracer.setCamera(PTR.lockedCamera);
+			if (!PTR.open) resumeRenderer();
+			if (id === 'preview' || !PTR.finalStarted) {
+				if (PTR.settings.render_mode !== 'preview') PTR.tracer.reset();
+				PTR.settings.render_mode = 'preview';
+				PTR.finalStarted = false;
+			}
+			if (PTR.needsRebuild || !wasTrace) {
+				PTR.needsRebuild = false;
+				PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
+				rebuildScene();
+			}
+		}
 	} else {
-		if (PTR.needsRebuild || (previousStep === 'materials') !== (id === 'materials')) rebuildScene();
-		if (previousStep !== id) { PTR.tracer.reset(); PTR.tracer.previewCameraKey = null; }
-		if (!trace || !wasTrace) PTR.paused = false;
-		if (!PTR.open) resumeRenderer();
-		applyResolution();
+		if (wasTrace && PTR.tracer) pauseRenderer();
+		PTR.finalStarted = false;
+		PTR.raster?.start();
 	}
+	fitFrame();
+	if (trace && PTR.tracer) applyResolution();
 	updateExportSummary();
 	updateExportActions();
 	saveSettings();
@@ -334,10 +343,10 @@ function startRenderer() {
 		applyResolution();
 		tracer.setEnvironment(PTR.settings, PTR.customEnv);
 		rebuildScene();
-		tracer.setCamera(resolveRenderCamera(PTR.step, PTR.inspectionCam, PTR.cam, PTR.lockedCamera, activeBlockbenchScene()?.fov));
+		tracer.setCamera(PTR.lockedCamera || PTR.cam.state());
 		if (window.ResizeObserver) {
 			PTR.resizeObs = new ResizeObserver(() => {
-				if (isInspectionStep(PTR.step) || PTR.settings.res_mode === 'fit') applyResolution();
+				if (PTR.settings.res_mode === 'fit') applyResolution();
 			});
 			PTR.resizeObs.observe(PTR.nodes.frame);
 		}
@@ -392,7 +401,6 @@ export function openWindow() {
 			updateExportSummary();
 		};
 		PTR.onRenderStatus = updateExportActions;
-		PTR.onCameraSynced = syncControls;
 		PTR.onSettingsLoaded = syncSettingsToView;
 		setStep('materials');
 	} catch (err) {
@@ -415,7 +423,6 @@ export function closeWindow() {
 	}
 	PTR.onSettingChanged = null;
 	PTR.onRenderStatus = null;
-	PTR.onCameraSynced = null;
 	PTR.onSettingsLoaded = null;
 	PTR.needsRebuild = false;
 	PTR.refreshMaterialList = null;

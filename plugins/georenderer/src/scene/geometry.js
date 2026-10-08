@@ -92,7 +92,7 @@ function buildMaterialLookup() {
 	return map;
 }
 
-export function collectGeometry({ includePreviewModels = true } = {}) {
+export function collectGeometry() {
 	const positions = [];
 	const normals = [];
 	const uvs = [];
@@ -204,9 +204,9 @@ export function collectGeometry({ includePreviewModels = true } = {}) {
 		}
 	});
 
-	const activeScene = includePreviewModels ? activeBlockbenchScene() : null;
+	const activeScene = activeBlockbenchScene();
 	const previewMaterials = new Map();
-	const previewModels = includePreviewModels ? activeBlockbenchPreviewModels() : [];
+	const previewModels = activeBlockbenchPreviewModels();
 	for (const model of previewModels) {
 		const root = model.model_3d;
 		root.updateWorldMatrix(true, true);

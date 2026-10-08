@@ -26,27 +26,6 @@ export function canNavigatePreview(id) {
 	return isInspectionStep(id) || canMoveCamera(id);
 }
 
-export function resolveRenderSettings(settings, step) {
-	if (step === 'materials') return { ...settings, ground_on: false, aperture: 0 };
-	if (step === 'scene') return { ...settings, aperture: 0 };
-	return settings;
-}
-
-export function resolveRenderCamera(step, inspectionCam, cam, lockedCamera, sceneFov) {
-	if (isInspectionStep(step)) {
-		const state = inspectionCam.state();
-		if (step === 'scene' && sceneFov && !state.ortho) state.fov = sceneFov;
-		return state;
-	}
-	return isTraceStep(step) && lockedCamera ? lockedCamera : cam.state();
-}
-
-export function resolveSampleTarget(settings, step, finalStarted) {
-	if (step === 'export' && finalStarted) return Math.max(1, settings.final_samples);
-	if (!isTraceStep(step)) return Math.max(32, Math.min(256, settings.preview_samples));
-	return Math.max(1, settings.preview_samples);
-}
-
 export function canExport(step, finalStarted, spp, finalSamples) {
 	return step === 'export' && !!finalStarted && spp >= Math.max(1, finalSamples);
 }
@@ -58,17 +37,12 @@ export function validateFinalSize(width, height, maxTextureSize) {
 }
 
 export function resolveRenderSize(settings, step, finalStarted, viewport, interacting) {
-	const inspection = isInspectionStep(step);
-	let width = !inspection && settings.res_mode === 'custom' ? settings.res_width : Math.max(64, Math.floor(viewport.width));
-	let height = !inspection && settings.res_mode === 'custom' ? settings.res_height : Math.max(64, Math.floor(viewport.height));
-	if (step !== 'export' || !finalStarted) {
+	let width = settings.res_mode === 'custom' ? settings.res_width : Math.max(64, Math.floor(viewport.width));
+	let height = settings.res_mode === 'custom' ? settings.res_height : Math.max(64, Math.floor(viewport.height));
+	if (step === 'preview' || (step === 'export' && !finalStarted)) {
 		const scale = Math.max(0.25, Math.min(1, settings.preview_scale || 1));
 		width *= scale;
 		height *= scale;
-	}
-	if (!isTraceStep(step)) {
-		const scale = Math.min(1, 1024 / Math.max(width, height));
-		width *= scale; height *= scale;
 	}
 	if (interacting) {
 		const scale = Math.max(0.2, Math.min(1, settings.interactive_scale || 1));

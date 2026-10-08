@@ -1,8 +1,7 @@
 import { IDLE_PASS_CAP, INTERACTIVE_MAX_BOUNCE, INTERACTIVE_PASS_CAP } from '../core/config.js';
 import { clamp } from '../core/math.js';
 import { PTR, formatDuration, saveSettings } from './state.js';
-import { canMoveCamera, isTraceStep, resolveRenderCamera, resolveRenderSettings, resolveRenderSize, resolveSampleTarget } from './workflow-state.js';
-import { activeBlockbenchScene } from '../scene/blockbench-scene.js';
+import { isTraceStep, resolveRenderSize } from './workflow-state.js';
 
 const watchedPreviewImages = new WeakSet();
 
@@ -15,9 +14,9 @@ export function showError(err) {
 export function rebuildScene() {
 	const t = PTR.tracer;
 	if (!t) return;
-	if (!PTR.open) { PTR.needsRebuild = true; return; }
+	if (!PTR.open || !isTraceStep(PTR.step)) { PTR.needsRebuild = true; return; }
 	try {
-		const scene = t.buildScene(resolveRenderSettings(PTR.settings, PTR.step), PTR.overrides, PTR.groupOverrides, { includePreviewModels: PTR.step !== 'materials' });
+		const scene = t.buildScene(PTR.settings, PTR.overrides, PTR.groupOverrides);
 		for (const image of scene.pendingImages || []) {
 			if (image.complete && image.naturalWidth) {
 				queueMicrotask(rebuildScene);
@@ -28,7 +27,6 @@ export function rebuildScene() {
 			image.addEventListener('load', () => rebuildScene(), { once: true });
 		}
 		PTR.stale = false;
-		PTR.needsRebuild = false;
 		if (PTR.refreshMaterialList) PTR.refreshMaterialList();
 		updateStatus(scene);
 		t.reset();
@@ -39,7 +37,7 @@ export function rebuildScene() {
 
 export function applyResolution() {
 	const t = PTR.tracer;
-	if (!t || !PTR.open || !PTR.nodes.viewport) return;
+	if (!t || !PTR.open || !isTraceStep(PTR.step) || !PTR.nodes.viewport) return;
 	const rect = (PTR.nodes.frame || PTR.nodes.viewport).getBoundingClientRect();
 	const { width: nw, height: nh } = resolveRenderSize(PTR.settings, PTR.step, PTR.finalStarted, rect, PTR.interacting);
 	if (nw !== t.width || nh !== t.height) {
@@ -70,7 +68,7 @@ function interactiveSettings(settings) {
 }
 
 function currentMaxSamples() {
-	return resolveSampleTarget(PTR.settings, PTR.step, PTR.finalStarted);
+	return PTR.settings.render_mode === 'final' ? PTR.settings.final_samples : PTR.settings.preview_samples;
 }
 
 export function updateStatus(scene) {
@@ -108,7 +106,6 @@ function updateWatermarkPreview() {
 	const t = PTR.tracer;
 	if (!wm) return;
 	const s = PTR.settings;
-	if (!isTraceStep(PTR.step)) { wm.style.display = 'none'; return; }
 	if (!s.watermark_enable || !s.watermark_text || !t || !t.width || !t.height) {
 		wm.style.display = 'none';
 		return;
@@ -135,22 +132,11 @@ function updateWatermarkPreview() {
 }
 
 export function loop() {
-	if (!PTR.open) return;
+	if (!PTR.open || !isTraceStep(PTR.step)) return;
 	if (PTR.nodes.canvas && !PTR.nodes.canvas.isConnected) { closeRenderer(); return; }
 	PTR.raf = requestAnimationFrame(loop);
 	const t = PTR.tracer;
 	if (!t || !t.scene || !t.env || PTR.paused) return;
-	if (canMoveCamera(PTR.step) && PTR.settings.auto_sync && PTR.cam.syncFromPreview()) {
-		const cam = PTR.cam;
-		if (PTR.settings.fov !== cam.fov || PTR.settings.ortho !== cam.ortho || PTR.settings.camera_distance !== cam.distance) {
-			PTR.settings.fov = cam.fov; PTR.settings.ortho = cam.ortho; PTR.settings.camera_distance = cam.distance;
-			PTR.onCameraSynced?.();
-			saveSettings();
-		}
-	}
-	const camera = resolveRenderCamera(PTR.step, PTR.inspectionCam, PTR.cam, PTR.lockedCamera, activeBlockbenchScene()?.fov);
-	const cameraKey = JSON.stringify(camera);
-	if (t.previewCameraKey !== cameraKey) { t.setCamera(camera); t.previewCameraKey = cameraKey; }
 
 	const now = performance.now();
 	const dt = now - PTR.lastFrame;
@@ -171,9 +157,8 @@ export function loop() {
 	if (t.spp >= maxSamples) return;
 
 	try {
-		t.setCameraOnly(camera);
-		const settings = resolveRenderSettings(PTR.settings, PTR.step);
-		const passSettings = PTR.interacting ? interactiveSettings(settings) : settings;
+		t.setCameraOnly(PTR.lockedCamera || PTR.cam.state());
+		const passSettings = PTR.interacting ? interactiveSettings(PTR.settings) : PTR.settings;
 		const n = Math.min(PTR.passesPerFrame, maxSamples - t.spp);
 		if (n > 0 && t.beginFrame(passSettings, PTR.interacting)) {
 			for (let i = 0; i < n; i++) t.renderPass();
@@ -181,7 +166,7 @@ export function loop() {
 		} else {
 			PTR.lastPasses = 0;
 		}
-		t.present(PTR.interacting ? Object.assign({}, settings, { denoise: false, bloom_enable: false }) : settings);
+		t.present(PTR.interacting ? Object.assign({}, PTR.settings, { denoise: false, bloom_enable: false }) : PTR.settings);
 	} catch (err) {
 		showError(err);
 		PTR.paused = true;
@@ -196,7 +181,7 @@ export function pauseRenderer() {
 }
 
 export function resumeRenderer() {
-	if (!PTR.tracer || PTR.open) return;
+	if (!PTR.tracer || PTR.open || !isTraceStep(PTR.step)) return;
 	PTR.open = true;
 	PTR.paused = false;
 	PTR.lastFrame = performance.now();
