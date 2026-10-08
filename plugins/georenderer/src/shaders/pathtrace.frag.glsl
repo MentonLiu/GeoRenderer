@@ -22,6 +22,7 @@ precision highp sampler2D;
 #define MF_FORCE_METALNESS 2048
 
 uniform vec2 uResolution;
+uniform vec2 uTileOrigin;
 uniform int  uSeed;
 uniform int  uMaxBounce;
 uniform int  uLightSamples;
@@ -936,13 +937,14 @@ vec3 tracePath(vec3 ro, vec3 rd, out float alphaOut, out vec3 gAlbedo, out vec3 
 
 void main() {
 	ivec2 px = ivec2(gl_FragCoord.xy);
-	g_rng = uint(px.x) * 1973u + uint(px.y) * 9277u + uint(uSeed) * 26699u;
+	ivec2 imagePx = px + ivec2(uTileOrigin);
+	g_rng = uint(imagePx.x) * 1973u + uint(imagePx.y) * 9277u + uint(uSeed) * 26699u;
 	g_rng = g_rng | 1u;
 	pcgNext();
 	pcgNext();
 
 	vec2 jitter = rnd2();
-	vec2 ndc = ((gl_FragCoord.xy - 0.5 + jitter) / uResolution) * 2.0 - 1.0;
+	vec2 ndc = ((gl_FragCoord.xy + uTileOrigin - 0.5 + jitter) / uResolution) * 2.0 - 1.0;
 
 	vec3 ro, rd;
 	if (uOrtho == 1) {

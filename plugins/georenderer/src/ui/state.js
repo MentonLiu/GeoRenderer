@@ -64,6 +64,8 @@ export const PTR = {
 	selectedGroupUuid: null,
 	collapsedGroups: new Set(),
 	finalStarted: false,
+	finalRender: null,
+	needsPresent: false,
 	raster: null,
 	refreshMaterialList: null,
 	rebuildTimer: 0,

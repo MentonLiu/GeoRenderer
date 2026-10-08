@@ -8,6 +8,7 @@ uniform float uSharpenStrength;
 uniform int   uGrainEnable;
 uniform float uGrainStrength;
 uniform float uGrainSeed;
+uniform vec2 uTileOrigin;
 
 out vec4 fragColor;
 
@@ -23,16 +24,17 @@ void main() {
 	vec3 color = c.rgb;
 
 	if (uSharpenEnable == 1) {
-		vec3 n = texelFetch(uTex, px + ivec2(0, 1), 0).rgb
-			+ texelFetch(uTex, px + ivec2(0, -1), 0).rgb
-			+ texelFetch(uTex, px + ivec2(1, 0), 0).rgb
-			+ texelFetch(uTex, px + ivec2(-1, 0), 0).rgb;
+		ivec2 last = textureSize(uTex, 0) - 1;
+		vec3 n = texelFetch(uTex, clamp(px + ivec2(0, 1), ivec2(0), last), 0).rgb
+			+ texelFetch(uTex, clamp(px + ivec2(0, -1), ivec2(0), last), 0).rgb
+			+ texelFetch(uTex, clamp(px + ivec2(1, 0), ivec2(0), last), 0).rgb
+			+ texelFetch(uTex, clamp(px + ivec2(-1, 0), ivec2(0), last), 0).rgb;
 		vec3 lap = color * 4.0 - n;
 		color = clamp(color + uSharpenStrength * lap, 0.0, 1.0);
 	}
 
 	if (uGrainEnable == 1) {
-		float n = hash(gl_FragCoord.xy + uGrainSeed) - 0.5;
+		float n = hash(gl_FragCoord.xy + uTileOrigin + uGrainSeed) - 0.5;
 		color = clamp(color + n * uGrainStrength, 0.0, 1.0);
 	}
 

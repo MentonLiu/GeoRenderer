@@ -91,16 +91,18 @@ function drawWatermark(ctx, w, h) {
 
 function renderOutputCanvas() {
 	const t = PTR.tracer;
-	if (!t || !canExport(PTR.step, PTR.finalStarted, t.spp, PTR.settings.final_samples)) {
+	const completed = PTR.finalRender ? PTR.finalRender.completed : !t?.frameSync;
+	if (!t || !canExport(PTR.step, PTR.finalStarted, t.spp, PTR.settings.final_samples, completed)) {
 		Blockbench.showQuickMessage('请等待最终渲染完成', 1500);
 		return null;
 	}
-	t.present(PTR.settings);
+	if (!PTR.finalRender) t.present(PTR.settings);
+	const source = PTR.finalRender?.canvas || t.canvas;
 	const out = document.createElement('canvas');
-	out.width = t.canvas.width;
-	out.height = t.canvas.height;
+	out.width = source.width;
+	out.height = source.height;
 	const ctx = out.getContext('2d');
-	ctx.drawImage(t.canvas, 0, 0);
+	ctx.drawImage(source, 0, 0);
 	drawWatermark(ctx, out.width, out.height);
 	return out;
 }

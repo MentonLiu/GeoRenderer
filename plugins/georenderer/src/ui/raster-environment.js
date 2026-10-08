@@ -54,9 +54,15 @@ export class RasterEnvironment {
 		return target.texture;
 	}
 
-	dispose() {
+	release() {
 		this.target?.dispose();
 		this.background?.dispose();
+		this.target = this.background = this.source = null;
+		this.key = '';
+	}
+
+	dispose() {
+		this.release();
 		this.pmrem.dispose();
 	}
 }

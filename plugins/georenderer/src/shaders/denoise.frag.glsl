@@ -64,6 +64,7 @@ void main() {
 		return;
 	}
 	vec3 np = texelFetch(uNormalTex, px, 0).xyz;
+	vec3 ap = texelFetch(uAlbedoTex, px, 0).rgb * uInvSpp;
 	float nl = length(np);
 	np = nl > 1e-6 ? np / nl : vec3(0.0, 1.0, 0.0);
 
@@ -81,6 +82,7 @@ void main() {
 			float varQ = loadVariance(q, size);
 			float depthQ = loadDepth(q, size);
 			vec3 nq = texelFetch(uNormalTex, q, 0).xyz;
+			vec3 aq = texelFetch(uAlbedoTex, q, 0).rgb * uInvSpp;
 			float ql = length(nq);
 			nq = ql > 1e-6 ? nq / ql : vec3(0.0, 1.0, 0.0);
 
@@ -91,7 +93,10 @@ void main() {
 			float dd = abs(depthP - depthQ);
 			float wd = (depthP > 1.0e5 || depthQ > 1.0e5) ? (dd < 1.0 ? 1.0 : 0.0)
 				: exp(-dd * dd / max(uPhiDepth * depthP * depthP + 1e-6, 1e-6));
-			float w = kern(dx) * kern(dy) * wc * wn * wd;
+			// Material texture edges must remain boundaries even at high denoise strength.
+			vec3 da = ap - aq;
+			float wa = exp(-dot(da, da) / 0.0025);
+			float w = kern(dx) * kern(dy) * wc * wn * wd * wa;
 			sum += cq * w;
 			wsum += w;
 			varSum += varQ * w * w;

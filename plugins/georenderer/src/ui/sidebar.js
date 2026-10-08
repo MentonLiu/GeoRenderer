@@ -134,7 +134,8 @@ export function buildSidebar() {
 			rowSlider('交互降采样', 'interactive_scale', 0.2, 1, 0.05, 2),
 			rowSelect('GPU 模式', 'gpu_profile', { auto: '自动检测', apple: 'Apple GPU', standard: '标准' }),
 			el('div', { class: 'ptr_note', text: '自动检测不到 Apple GPU 时，可手动选择 Apple GPU。该模式优化拖动预览和全屏渲染缓冲。' }),
-			rowCheck('线性过滤纹理', 'filter_linear'),
+			rowCheck('平滑纹理（线性过滤）', 'filter_linear'),
+			el('div', { class: 'ptr_note', text: '像素风格贴图建议关闭平滑纹理，以保留清晰的像素边界。' }),
 			rowCheck('自动重载模型', 'auto_follow'),
 		]),
 	];
