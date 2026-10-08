@@ -2,7 +2,7 @@
 
 GeoRenderer 是一个 Blockbench 路径追踪插件。本仓库是独立的插件开发工程；Blockbench 加载的文件是 [`plugins/georenderer/georenderer.js`](plugins/georenderer/georenderer.js)，插件 ID 和文件名均为 `georenderer`。原始参考插件保存在 [`reference/pathtracer.js`](reference/pathtracer.js)。
 
-当前版本为 **0.1.4**。第 2 步使用 Blockbench 预览场景及其中的 3D 模型和立方体贴图。最终渲染会按 GPU 缓冲尺寸逐块生成大画幅，并为降噪、泛光等滤镜保留分块边缘；降噪也会保护背景、镜面反射和材质边界的细节。完整记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+当前版本为 **0.1.5**。第 2 步使用 Blockbench 预览场景及其中的 3D 模型和立方体贴图。最终渲染会按 GPU 缓冲尺寸逐块生成大画幅，并为降噪、泛光等滤镜保留分块边缘；降噪也会保护背景、镜面反射和材质边界的细节。完整记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 开发
 
