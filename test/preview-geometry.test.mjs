@@ -42,6 +42,10 @@ test('preview scene meshes and independent reference models enter the trace geom
 	assert.equal(geometry.texRefs[0].previewMaterial, material);
 	assert.deepEqual([...geometry.positions], [0, 0, 0, 1, 0, 0, 0, 1, 0]);
 	assert.equal(geometry.fog.density, 0.1);
+	const isolated = collectGeometry({ includePreviewModels: false });
+	assert.equal(isolated.previewTriCount, 0);
+	assert.equal(isolated.triCount, 0);
+	assert.equal(isolated.fog, null);
 
 	restoreBlockbenchSceneSelection('');
 	scene.preview_models = [];

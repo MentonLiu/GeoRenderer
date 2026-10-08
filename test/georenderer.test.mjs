@@ -10,7 +10,7 @@ import { DEFAULTS } from '../plugins/georenderer/src/core/config.js';
 import { buildBVH } from '../plugins/georenderer/src/scene/bvh.js';
 import { packAtlas } from '../plugins/georenderer/src/scene/atlas.js';
 import { buildEnvDistribution, generateSkyPixels, parseHDR } from '../plugins/georenderer/src/scene/environment.js';
-import { STEPS, canExport, canMoveCamera, canNavigatePreview, isInspectionStep, isTraceStep, resolveRenderSize, stepIndex, validateFinalSize } from '../plugins/georenderer/src/ui/workflow-state.js';
+import { STEPS, canExport, canMoveCamera, canNavigatePreview, isInspectionStep, isTraceStep, resolveRenderCamera, resolveRenderSettings, resolveRenderSize, resolveSampleTarget, stepIndex, validateFinalSize } from '../plugins/georenderer/src/ui/workflow-state.js';
 import { groupChainForElement, materialKey, resolveMaterialOverride } from '../plugins/georenderer/src/scene/group-overrides.js';
 import { applyPreset, applyTimeOfDay, formatClock } from '../plugins/georenderer/src/scene/presets.js';
 
@@ -123,6 +123,32 @@ test('export actions unlock only after the final sample target is reached', () =
   assert.equal(canExport('export', false, 256, 256), false);
   assert.equal(canExport('export', true, 255, 256), false);
   assert.equal(canExport('export', true, 256, 256), true);
+});
+
+test('live material rendering uses the inspection viewport and bounded progressive samples', () => {
+  const settings = { ...DEFAULTS, res_width: 8192, res_height: 4096, preview_scale: 0.5 };
+  const viewport = { width: 800, height: 600 };
+  assert.deepEqual(resolveRenderSize(settings, 'materials', false, viewport, false), { width: 400, height: 300 });
+  assert.deepEqual(resolveRenderSize(settings, 'scene', false, viewport, true), { width: 80, height: 60 });
+  assert.deepEqual(resolveRenderSize(settings, 'camera', false, viewport, false), { width: 1024, height: 512 });
+  assert.equal(resolveSampleTarget(settings, 'materials', false), 32);
+  assert.equal(resolveSampleTarget({ ...settings, preview_samples: 10000 }, 'scene', false), 256);
+  assert.equal(resolveSampleTarget(settings, 'preview', false), 8);
+  assert.equal(resolveSampleTarget(settings, 'export', true), 256);
+  assert.equal(resolveRenderSettings(settings, 'materials').ground_on, false);
+  assert.equal(settings.ground_on, true);
+});
+
+test('inspection navigation and scene FOV never change the locked export camera', () => {
+  const inspection = { state: () => ({ pos: [1, 2, 3], fov: 45, ortho: false }) };
+  const cam = { state: () => ({ pos: [4, 5, 6], fov: 60 }) };
+  const locked = { pos: [7, 8, 9], fov: 75 };
+  assert.equal(resolveRenderCamera('materials', inspection, cam, locked, 90).fov, 45);
+  assert.equal(resolveRenderCamera('scene', inspection, cam, locked, 90).fov, 90);
+  assert.equal(resolveRenderCamera('camera', inspection, cam, locked, 90).fov, 60);
+  assert.equal(resolveRenderCamera('preview', inspection, cam, locked, 90), locked);
+  assert.equal(resolveRenderCamera('export', inspection, cam, locked, 90), locked);
+  assert.equal(inspection.state().fov, 45);
 });
 
 test('final render size respects framebuffer limits', () => {

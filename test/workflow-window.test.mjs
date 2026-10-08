@@ -54,10 +54,14 @@ test('returning from camera setup resumes rendering and updates the pause button
 	};
 
 	setStep('camera');
-	assert.equal(PTR.open, false);
+	assert.equal(PTR.open, true);
+	assert.equal(PTR.paused, false);
+	assert.equal(PTR.nodes.canvas.style.display, 'block');
+	assert.equal(PTR.nodes.rasterCanvas.style.display, 'block');
 	setStep('preview');
 	assert.equal(PTR.open, true);
 	assert.equal(PTR.paused, false);
 	assert.equal(PTR.nodes.btnPauseIcon.textContent, 'pause');
 	assert.equal(PTR.nodes.btnPauseLabel.textContent, '暂停');
+	assert.equal(PTR.nodes.rasterCanvas.style.display, 'none');
 });
