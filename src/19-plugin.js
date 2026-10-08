@@ -4,7 +4,7 @@
 
 	if (typeof window !== 'undefined' && window.__PATHTRACER_TEST__) {
 		window.__PATHTRACER_INTERNALS__ = {
-			VS_FULLSCREEN, FS_PATHTRACE, FS_DENOISE,
+			VS_FULLSCREEN, FS_PATHTRACE, FS_PATHTRACE_COLOR_ONLY, FS_DENOISE,
 			FS_COMPOSITE, FS_BLOOM_BRIGHT, FS_BLOOM_BLUR, FS_TONEMAP, FS_FINAL,
 			PathTracer, buildBVH, buildMaterials, collectGeometry,
 			generateSkyPixels, buildEnvDistribution, parseHDR, packAtlas,

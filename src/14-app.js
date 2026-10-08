@@ -167,7 +167,7 @@
 			t.setCameraOnly(PTR.cam.state());
 			const passSettings = PTR.interacting ? interactiveSettings(PTR.settings) : PTR.settings;
 			const n = Math.min(PTR.passesPerFrame, maxSamples - t.spp);
-			if (n > 0 && t.beginFrame(passSettings)) {
+			if (n > 0 && t.beginFrame(passSettings, PTR.interacting)) {
 				for (let i = 0; i < n; i++) t.renderPass();
 				PTR.lastPasses = n;
 			} else {
@@ -180,4 +180,3 @@
 		}
 		updateStatus();
 	}
-
