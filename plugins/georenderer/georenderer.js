@@ -4020,8 +4020,6 @@
     const btnPause = el("button", { class: "ptr_btn" }, [btnPauseIcon, btnPauseLabel]);
     btnPause.addEventListener("click", () => {
       PTR.paused = !PTR.paused;
-      btnPauseIcon.textContent = PTR.paused ? "play_arrow" : "pause";
-      btnPauseLabel.textContent = PTR.paused ? "继续" : "暂停";
       PTR.lastFrame = performance.now();
       updateStatus();
     });
@@ -4079,6 +4077,8 @@
       bar,
       wrapper,
       btnPause,
+      btnPauseIcon,
+      btnPauseLabel,
       watermark,
       btnStart,
       btnCopy,
@@ -4166,6 +4166,8 @@
     PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
   }
   function updateExportActions() {
+    PTR.nodes.btnPauseIcon.textContent = PTR.paused ? "play_arrow" : "pause";
+    PTR.nodes.btnPauseLabel.textContent = PTR.paused ? "继续" : "暂停";
     const ready = canExport(PTR.step, PTR.finalStarted, PTR.tracer ? PTR.tracer.spp : 0, PTR.settings.final_samples);
     for (const button of [PTR.nodes.btnCopy, PTR.nodes.btnSave, PTR.nodes.btnBlockbench]) button.disabled = !ready;
     PTR.nodes.btnStart.disabled = !PTR.tracer || PTR.finalStarted && !ready;
