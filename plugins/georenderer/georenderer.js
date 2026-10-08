@@ -303,7 +303,10 @@
     interactTimer: 0,
     nodes: {},
     controls: [],
-    step: "camera",
+    step: "materials",
+    lockedCamera: null,
+    selectedGroupUuid: null,
+    collapsedGroups: /* @__PURE__ */ new Set(),
     finalStarted: false,
     raster: null,
     refreshMaterialList: null,
@@ -344,8 +347,9 @@
 
   // plugins/georenderer/src/ui/workflow-state.js
   var STEPS = [
-    { id: "camera", label: "镜头与材质", icon: "videocam" },
+    { id: "materials", label: "材质", icon: "account_tree" },
     { id: "scene", label: "场景", icon: "landscape" },
+    { id: "camera", label: "相机", icon: "videocam" },
     { id: "preview", label: "预览渲染", icon: "tune" },
     { id: "export", label: "最终导出", icon: "save_alt" }
   ];
@@ -354,6 +358,9 @@
   }
   function isTraceStep(id) {
     return id === "preview" || id === "export";
+  }
+  function canMoveCamera(id) {
+    return id === "materials" || id === "scene" || id === "camera";
   }
   function canExport(step, finalStarted, spp, finalSamples) {
     return step === "export" && !!finalStarted && spp >= Math.max(1, finalSamples);
@@ -525,27 +532,10 @@
       PTR.spsEma = PTR.spsEma > 0 ? PTR.spsEma * 0.85 + inst * 0.15 : inst;
     }
     PTR.lastPasses = 0;
-    if (PTR.cam.fov !== PTR.settings.fov || PTR.cam.ortho !== !!PTR.settings.ortho) {
-      PTR.cam.fov = PTR.settings.fov;
-      PTR.cam.ortho = !!PTR.settings.ortho;
-      t.reset();
-    }
-    if (PTR.settings.auto_sync) {
-      const before = PTR.cam.position().concat(PTR.cam.target);
-      if (PTR.cam.syncFromPreview()) {
-        const after = PTR.cam.position().concat(PTR.cam.target);
-        for (let i = 0; i < 6; i++) {
-          if (Math.abs(before[i] - after[i]) > 1e-4) {
-            t.reset();
-            break;
-          }
-        }
-      }
-    }
     const maxSamples = currentMaxSamples();
     if (t.spp >= maxSamples) return;
     try {
-      t.setCameraOnly(PTR.cam.state());
+      t.setCameraOnly(PTR.lockedCamera || PTR.cam.state());
       const passSettings = PTR.interacting ? interactiveSettings(PTR.settings) : PTR.settings;
       const n = Math.min(PTR.passesPerFrame, maxSamples - t.spp);
       if (n > 0 && t.beginFrame(passSettings, PTR.interacting)) {
@@ -1469,6 +1459,14 @@
     }
     const maxTexSize = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096, 8192);
     const sizes = [];
+    const atlasIndex = /* @__PURE__ */ new Map();
+    const addAtlasSource = (slot, key, width, height) => {
+      if (!atlasIndex.has(key)) {
+        atlasIndex.set(key, sizes.length);
+        sizes.push([width, height]);
+      }
+      slot.atlasIndex = atlasIndex.get(key);
+    };
     slotList.forEach((slot) => {
       const tex = slot.texture;
       slot.color = null;
@@ -1476,7 +1474,7 @@
       slot.normal = null;
       slot.side = "double";
       if (!tex) {
-        sizes.push([1, 1]);
+        addAtlasSource(slot, "__none__", 1, 1);
         return;
       }
       let group = null;
@@ -1523,7 +1521,7 @@
       }
       w = clamp(w | 0, 1, maxTexSize);
       h = clamp(h | 0, 1, maxTexSize);
-      sizes.push([w, h]);
+      addAtlasSource(slot, tex.uuid + "|" + (slotOv.emissive_map || ""), w, h);
     });
     const packed = packAtlas(sizes, maxTexSize);
     if (!packed) throw new Error("纹理图集打包失败：贴图总面积超出 GPU 上限。");
@@ -1544,9 +1542,12 @@
     atlasE.ctx.fillStyle = "#000000";
     atlasE.ctx.fillRect(0, 0, S, S);
     atlasC.ctx.clearRect(0, 0, S, S);
-    slotList.forEach((slot, i) => {
-      const r = packed.rects[i];
+    const drawnSources = /* @__PURE__ */ new Set();
+    slotList.forEach((slot) => {
+      const r = packed.rects[slot.atlasIndex];
       slot.rect = r;
+      if (drawnSources.has(slot.atlasIndex)) return;
+      drawnSources.add(slot.atlasIndex);
       try {
         if (slot.color) {
           atlasC.ctx.clearRect(r.x, r.y, r.w, r.h);
@@ -2715,6 +2716,141 @@
     });
   }
 
+  // plugins/georenderer/src/ui/group-panel.js
+  function groups() {
+    return typeof Group !== "undefined" && Group.all || [];
+  }
+  function isGroup(node) {
+    return typeof Group !== "undefined" && node instanceof Group;
+  }
+  function selectGroup(uuid) {
+    const group = groups().find((item) => item.uuid === uuid);
+    PTR.selectedGroupUuid = group ? group.uuid : null;
+    let parent = group && group.parent;
+    while (parent && typeof parent === "object") {
+      if (parent.uuid) PTR.collapsedGroups.delete(parent.uuid);
+      parent = parent.parent;
+    }
+    if (PTR.raster) PTR.raster.highlightGroup(PTR.selectedGroupUuid);
+    buildGroupList();
+  }
+  function changed(group, reset) {
+    reset.disabled = false;
+    const row = PTR.nodes.groupList?.querySelector(`[data-group-uuid="${group.uuid}"]`);
+    if (row) row.classList.add("modified");
+    saveSettings();
+    clearTimeout(PTR.rasterRefreshTimer);
+    if (PTR.raster) PTR.rasterRefreshTimer = setTimeout(() => PTR.raster?.refreshModel(), 60);
+    if (PTR.tracer) {
+      clearTimeout(PTR.rebuildTimer);
+      PTR.rebuildTimer = setTimeout(rebuildScene, 180);
+    }
+  }
+  function numberRow(label, key, min, max, step, fallback, group, reset) {
+    const effective = resolveMaterialOverride(null, groupChainForElement({ parent: group }), null, PTR.groupOverrides);
+    const value = effective[key] ?? fallback;
+    const range = el("input", { type: "range", min, max, step, value });
+    const number = el("input", { type: "number", min, max, step, value });
+    const apply = (raw) => {
+      var _a, _b;
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) return;
+      const next = clamp(parsed, min, max);
+      ((_a = PTR.groupOverrides)[_b = group.uuid] || (_a[_b] = {}))[key] = next;
+      range.value = next;
+      number.value = next;
+      changed(group, reset);
+    };
+    range.addEventListener("input", () => apply(range.value));
+    number.addEventListener("change", () => apply(number.value));
+    return makeRow(label, [range, number]);
+  }
+  function buildInspector(group) {
+    const panel = el("div", { class: "ptr_group_inspector" });
+    if (!group) {
+      panel.appendChild(el("div", { class: "ptr_note", text: "在左侧模型上点击部件，或在上方大纲中选择组，即可编辑该组材质。" }));
+      return panel;
+    }
+    const head = el("div", { class: "ptr_group_inspector_head" }, [
+      el("strong", { text: group.name || "未命名组" })
+    ]);
+    const reset = el("button", { type: "button", class: "ptr_btn", text: "重置此组" });
+    reset.disabled = !PTR.groupOverrides[group.uuid];
+    reset.addEventListener("click", () => {
+      delete PTR.groupOverrides[group.uuid];
+      changed(group, reset);
+      buildGroupList();
+    });
+    head.appendChild(reset);
+    panel.appendChild(head);
+    panel.appendChild(el("div", { class: "ptr_note", text: "只修改当前组；未修改的属性继承父组或默认值。" }));
+    panel.appendChild(numberRow("粗糙度", "roughness", 0, 1, 0.01, PTR.settings.def_roughness, group, reset));
+    panel.appendChild(numberRow("金属度", "metalness", 0, 1, 0.01, PTR.settings.def_metalness, group, reset));
+    panel.appendChild(numberRow("自发光强度", "emissive", 0, 20, 0.1, 0, group, reset));
+    const effective = resolveMaterialOverride(null, groupChainForElement({ parent: group }), null, PTR.groupOverrides);
+    const color = el("input", { type: "color", value: effective.emissive_color || "#ffffff" });
+    color.addEventListener("input", () => {
+      var _a, _b;
+      ((_a = PTR.groupOverrides)[_b = group.uuid] || (_a[_b] = {})).emissive_color = color.value;
+      changed(group, reset);
+    });
+    panel.appendChild(makeRow("发光颜色", [color]));
+    return panel;
+  }
+  function appendOutline(host, nodes, depth, parentGroup) {
+    for (const node of nodes || []) {
+      if (isGroup(node)) {
+        const open = !PTR.collapsedGroups.has(node.uuid);
+        const row = el("div", { class: "ptr_outline_row", "data-group-uuid": node.uuid, style: { paddingLeft: `${depth * 14}px` } });
+        const disclosure = el("button", { type: "button", class: "ptr_outline_disclosure", "aria-label": `${open ? "折叠" : "展开"} ${node.name || "未命名组"}`, "aria-expanded": String(open), text: open ? "▾" : "▸" });
+        disclosure.addEventListener("click", () => {
+          if (open) PTR.collapsedGroups.add(node.uuid);
+          else PTR.collapsedGroups.delete(node.uuid);
+          buildGroupList();
+        });
+        const selected = PTR.selectedGroupUuid === node.uuid;
+        const button = el("button", { type: "button", class: `ptr_outline_item${selected ? " selected" : ""}`, "aria-selected": String(selected) }, [
+          el("i", { class: "material-icons", text: "folder" }),
+          el("span", { text: node.name || "未命名组" })
+        ]);
+        button.addEventListener("click", () => selectGroup(node.uuid));
+        row.append(disclosure, button);
+        if (PTR.groupOverrides[node.uuid]) row.classList.add("modified");
+        host.appendChild(row);
+        if (open) appendOutline(host, node.children, depth + 1, node);
+      } else if (parentGroup) {
+        const row = el("div", { class: "ptr_outline_row", style: { paddingLeft: `${depth * 14 + 20}px` } });
+        const button = el("button", { type: "button", class: "ptr_outline_item ptr_outline_element" }, [
+          el("i", { class: "material-icons", text: "view_in_ar" }),
+          el("span", { text: node.name || "未命名部件" })
+        ]);
+        button.addEventListener("click", () => selectGroup(parentGroup.uuid));
+        row.appendChild(button);
+        host.appendChild(row);
+      }
+    }
+  }
+  function buildGroupList() {
+    const host = PTR.nodes.groupList;
+    if (!host) return;
+    const all = groups();
+    if (!all.some((group) => group.uuid === PTR.selectedGroupUuid)) PTR.selectedGroupUuid = null;
+    const oldTree = host.querySelector(".ptr_outline");
+    const scroll = oldTree ? oldTree.scrollTop : 0;
+    host.replaceChildren();
+    if (!all.length) {
+      host.appendChild(el("div", { class: "ptr_note", text: "当前模型没有组；请先在 Blockbench 大纲中建立组。" }));
+      return;
+    }
+    const tree = el("div", { class: "ptr_outline", role: "tree", "aria-label": "模型组大纲" });
+    const root = typeof Outliner !== "undefined" ? Outliner.root : [];
+    appendOutline(tree, root, 0, null);
+    if (!tree.childElementCount) appendOutline(tree, all.filter((group) => !isGroup(group.parent)), 0, null);
+    host.appendChild(tree);
+    tree.scrollTop = scroll;
+    host.appendChild(buildInspector(all.find((group) => group.uuid === PTR.selectedGroupUuid)));
+  }
+
   // plugins/georenderer/src/ui/settings-actions.js
   function exportSettingsToClipboard() {
     try {
@@ -2805,74 +2941,6 @@
       } catch (err) {
         showError(err);
       }
-    }
-  }
-
-  // plugins/georenderer/src/ui/group-panel.js
-  function buildGroupList() {
-    const host = PTR.nodes.groupList;
-    if (!host) return;
-    host.replaceChildren();
-    const groups = typeof Group !== "undefined" && Group.all || [];
-    if (!groups.length) {
-      host.appendChild(el("div", { class: "ptr_note", text: "当前模型没有组；在 Blockbench 的大纲中建立组后可在这里分别配置。" }));
-      return;
-    }
-    for (const group of groups) {
-      const box = el("div", { class: "ptr_mat" });
-      box.appendChild(el("div", { class: "ptr_mat_head", text: group.name || "未命名组" }));
-      let ov = PTR.groupOverrides[group.uuid] || null;
-      const toggle = el("input", { type: "checkbox" });
-      toggle.checked = !!ov;
-      const settingsBox = el("div");
-      settingsBox.hidden = !ov;
-      const update = () => {
-        saveSettings();
-        if (PTR.raster) PTR.raster.refreshModel();
-        if (PTR.tracer) {
-          clearTimeout(PTR.rebuildTimer);
-          PTR.rebuildTimer = setTimeout(rebuildScene, 180);
-        }
-      };
-      toggle.addEventListener("change", () => {
-        if (toggle.checked) {
-          ov = { roughness: PTR.settings.def_roughness, metalness: PTR.settings.def_metalness, emissive: 0 };
-          PTR.groupOverrides[group.uuid] = ov;
-        } else {
-          delete PTR.groupOverrides[group.uuid];
-          ov = null;
-        }
-        settingsBox.hidden = !ov;
-        if (ov) buildGroupList();
-        update();
-      });
-      box.appendChild(makeRow("覆盖材质", [toggle]));
-      for (const [label, key, min, max, step] of [
-        ["粗糙度", "roughness", 0, 1, 0.01],
-        ["金属度", "metalness", 0, 1, 0.01],
-        ["自发光", "emissive", 0, 20, 0.1]
-      ]) {
-        const input = el("input", { type: "number", min, max, step, value: ov ? ov[key] : 0 });
-        input.addEventListener("change", () => {
-          if (!ov) return;
-          const value = Number(input.value);
-          if (!Number.isFinite(value)) return;
-          ov[key] = clamp(value, min, max);
-          input.value = ov[key];
-          update();
-        });
-        settingsBox.appendChild(makeRow(label, [input]));
-      }
-      const color = el("input", { type: "color", value: ov && ov.emissive_color || "#ffffff" });
-      color.addEventListener("input", () => {
-        if (ov) {
-          ov.emissive_color = color.value;
-          update();
-        }
-      });
-      settingsBox.appendChild(makeRow("发光颜色", [color]));
-      box.appendChild(settingsBox);
-      host.appendChild(box);
     }
   }
 
@@ -2969,14 +3037,14 @@
     if (!host) return;
     const s = PTR.settings;
     const size = s.res_mode === "custom" ? `${s.res_width} × ${s.res_height}` : "适应预览窗口";
-    const groups = Object.keys(PTR.groupOverrides).length;
+    const groups2 = Object.keys(PTR.groupOverrides).length;
     const scene = SCENE_PRESETS[s.scene_preset]?.label || "自定义";
     const effects = [s.denoise && "降噪", s.bloom_enable && "泛光", s.vignette_enable && "暗角", s.sharpen_enable && "锐化", s.grain_enable && "颗粒"].filter(Boolean).join("、") || "无";
     const groundTexture = (typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === s.ground_texture_uuid);
     const lines = [
       `画面：${size}，${s.final_samples} spp`,
       `镜头：${s.ortho ? "正交" : `FOV ${s.fov}°`}，光圈 ${s.aperture}，${s.auto_focus ? "自动对焦" : `焦距 ${s.focus_distance}`}`,
-      `材质：${groups} 个组覆盖，默认粗糙度 ${s.def_roughness} / 金属度 ${s.def_metalness}`,
+      `材质：${groups2} 个组覆盖，默认粗糙度 ${s.def_roughness} / 金属度 ${s.def_metalness}`,
       `场景：${scene}，${formatClock(s.time_of_day)}，地面${s.ground_on ? "开启" : "关闭"}${groundTexture ? "（" + groundTexture.name + "）" : ""}`,
       `追踪：${s.max_bounce} 次反弹，${s.light_samples} 次光源采样`,
       `后期：${s.tone_mapping.toUpperCase()}，${effects}`
@@ -3063,6 +3131,9 @@
     camBtns.appendChild(btnSync);
     camBtns.appendChild(btnFrame);
     const cameraCards = [
+      card("取景说明", "lock", [
+        el("div", { class: "ptr_note", text: "在左侧拖动、平移或缩放来确定镜头。进入第 4 步后镜头位置固定；要修改镜头请返回本步。" })
+      ]),
       card("相机", "videocam", [
         camBtns,
         rowCheck("正交投影", "ortho"),
@@ -3198,8 +3269,8 @@
     PTR.nodes.matlist = el("div", { id: "ptr_matlist" });
     PTR.nodes.groupList = el("div", { id: "ptr_grouplist" });
     const materialCards = [
-      card("按组覆盖", "account_tree", [
-        el("div", { class: "ptr_note", text: "组级设置只影响该组及其子组中的模型；子组的设置会覆盖父组。不会修改 Blockbench 原模型材质。" }),
+      card("模型组大纲", "account_tree", [
+        el("div", { class: "ptr_note", text: "选择组或直接点击左侧模型部件。选中的组在下方单独编辑；子组可覆盖父组设置。" }),
         PTR.nodes.groupList
       ]),
       card("材质默认值", "palette", [
@@ -3250,8 +3321,9 @@
       ])
     ];
     const stages = buildStages([
-      { id: "camera", cards: [resolutionCard, ...cameraCards, ...materialCards] },
+      { id: "materials", cards: materialCards },
       { id: "scene", cards: envCards },
+      { id: "camera", cards: [resolutionCard, ...cameraCards] },
       { id: "preview", cards: [...renderCards, ...postCards] },
       { id: "export", cards: buildExportPanel() }
     ]);
@@ -3283,6 +3355,8 @@
       this.groundDisk.rotation.x = -Math.PI / 2;
       this.scene.add(this.groundDisk);
       this.model = new THREE.Group();
+      this.raycaster = new THREE.Raycaster();
+      this.selectionHelper = null;
       this.ownedMaterials = [];
       this.scene.add(this.model);
       this.raf = 0;
@@ -3299,7 +3373,11 @@
         const mesh = element && element.mesh;
         if (!mesh || element.visibility === false || mesh.visible === false) continue;
         const clone = mesh.clone(true);
-        const override = resolveMaterialOverride(null, groupChainForElement(element), null, PTR.groupOverrides);
+        const groupChain = groupChainForElement(element);
+        clone.traverse((object) => {
+          object.userData.georendererGroupChain = groupChain;
+        });
+        const override = resolveMaterialOverride(null, groupChain, null, PTR.groupOverrides);
         if (Object.keys(override).length) {
           clone.traverse((object) => {
             if (!object.isMesh || !object.material) return;
@@ -3321,6 +3399,35 @@
         clone.matrixAutoUpdate = false;
         this.model.add(clone);
       }
+      this.model.updateMatrixWorld(true);
+      this.highlightGroup(PTR.selectedGroupUuid);
+    }
+    pickGroup(clientX, clientY) {
+      if (!this.activeCamera) return null;
+      const rect = this.canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      const x = (clientX - rect.left) / rect.width * 2 - 1;
+      const y = 1 - (clientY - rect.top) / rect.height * 2;
+      this.activeCamera.updateMatrixWorld(true);
+      this.raycaster.setFromCamera(new THREE.Vector2(x, y), this.activeCamera);
+      const hit = this.raycaster.intersectObjects(this.model.children, true).find((item) => item.object.visible);
+      return hit?.object.userData.georendererGroupChain?.[0] || null;
+    }
+    highlightGroup(uuid) {
+      if (this.selectionHelper) {
+        this.scene.remove(this.selectionHelper);
+        this.selectionHelper.geometry.dispose();
+        this.selectionHelper.material.dispose();
+        this.selectionHelper = null;
+      }
+      if (!uuid) return;
+      const bounds = new THREE.Box3();
+      for (const clone of this.model.children) {
+        if (clone.userData.georendererGroupChain?.includes(uuid)) bounds.expandByObject(clone);
+      }
+      if (bounds.isEmpty()) return;
+      this.selectionHelper = new THREE.Box3Helper(bounds, new THREE.Color("#ffb74d"));
+      this.scene.add(this.selectionHelper);
     }
     setGroundTexture(texture) {
       if (this.groundMap) this.groundMap.dispose();
@@ -3343,7 +3450,15 @@
         this.renderer.setSize(width, height, false);
       }
       const settings2 = PTR.settings;
-      if (settings2.auto_sync) PTR.cam.syncFromPreview();
+      if (settings2.auto_sync && PTR.step === "camera" && PTR.cam.syncFromPreview()) {
+        if (settings2.fov !== PTR.cam.fov || settings2.ortho !== PTR.cam.ortho || settings2.camera_distance !== PTR.cam.distance) {
+          settings2.fov = PTR.cam.fov;
+          settings2.ortho = PTR.cam.ortho;
+          settings2.camera_distance = PTR.cam.distance;
+          syncControls();
+          saveSettings();
+        }
+      }
       const cam = PTR.cam.state();
       const target = cam.ortho ? this.orthoCamera : this.camera;
       if (cam.ortho) {
@@ -3359,9 +3474,11 @@
       target.updateProjectionMatrix();
       target.position.set(...cam.pos);
       target.lookAt(...cam.target);
-      this.grid.visible = PTR.step === "camera";
-      this.floor.visible = PTR.step !== "camera" && !!settings2.ground_on && !(settings2.ground_radius > 0);
-      this.groundDisk.visible = PTR.step !== "camera" && !!settings2.ground_on && settings2.ground_radius > 0;
+      this.activeCamera = target;
+      const materialStep = PTR.step === "materials";
+      this.grid.visible = materialStep;
+      this.floor.visible = !materialStep && !!settings2.ground_on && !(settings2.ground_radius > 0);
+      this.groundDisk.visible = !materialStep && !!settings2.ground_on && settings2.ground_radius > 0;
       this.floor.position.y = settings2.ground_y;
       this.groundDisk.position.y = settings2.ground_y;
       if (this.groundDisk.visible) this.groundDisk.scale.setScalar(settings2.ground_radius);
@@ -3375,13 +3492,13 @@
         this.groundMap.repeat.set(repeat, repeat);
       }
       const daylight = Math.max(0.1, Math.min(1, (Math.sin((settings2.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
-      this.ambient.intensity = PTR.step === "camera" ? 1.2 : 0.2 + daylight * Math.max(0, settings2.env_intensity);
-      this.sun.visible = PTR.step !== "camera" && !!settings2.sun_enable;
+      this.ambient.intensity = materialStep ? 1.2 : 0.2 + daylight * Math.max(0, settings2.env_intensity);
+      this.sun.visible = !materialStep && !!settings2.sun_enable;
       const dir = sunDirection(settings2);
       this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
       this.sun.intensity = Math.max(0, settings2.sun_intensity / 4);
       this.sun.color.set(settings2.sun_color);
-      this.scene.background = PTR.step !== "camera" && settings2.bg_mode === "transparent" ? null : PTR.step !== "camera" && PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(PTR.step === "camera" ? "#252b34" : settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(PTR.step === "camera" || settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
+      this.scene.background = !materialStep && settings2.bg_mode === "transparent" ? null : !materialStep && PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(materialStep ? "#252b34" : settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(materialStep || settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
       this.renderer.render(this.scene, target);
     }
     start() {
@@ -3401,6 +3518,7 @@
     }
     dispose() {
       this.stop();
+      this.highlightGroup(null);
       this.model.clear();
       for (const material of this.ownedMaterials) material.dispose();
       this.ownedMaterials = [];
@@ -3416,6 +3534,7 @@
   function attachViewportEvents(canvas) {
     let dragging = 0;
     let lastX = 0, lastY = 0;
+    let startX = 0, startY = 0, moved = false;
     const endDrag = () => {
       dragging = 0;
       canvas.classList.remove("dragging");
@@ -3423,17 +3542,21 @@
       PTR.interactTimer = setTimeout(() => setInteracting(false), 200);
     };
     canvas.addEventListener("pointerdown", (e) => {
+      if (!canMoveCamera(PTR.step) || e.button > 2) return;
       dragging = e.button === 0 && !e.shiftKey && !e.ctrlKey ? 1 : 2;
-      lastX = e.clientX;
-      lastY = e.clientY;
+      lastX = startX = e.clientX;
+      lastY = startY = e.clientY;
+      moved = false;
       canvas.setPointerCapture(e.pointerId);
-      canvas.classList.add("dragging");
-      clearTimeout(PTR.interactTimer);
-      setInteracting(true);
       e.preventDefault();
     });
     canvas.addEventListener("pointermove", (e) => {
       if (!dragging) return;
+      if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) moved = true;
+      if (!moved) return;
+      canvas.classList.add("dragging");
+      clearTimeout(PTR.interactTimer);
+      setInteracting(true);
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
       lastX = e.clientX;
@@ -3443,6 +3566,9 @@
       if (PTR.tracer) PTR.tracer.reset();
     });
     canvas.addEventListener("pointerup", (e) => {
+      if (dragging === 1 && !moved && canvas === PTR.nodes.rasterCanvas && PTR.step === "materials" && PTR.raster) {
+        selectGroup(PTR.raster.pickGroup(e.clientX, e.clientY));
+      }
       endDrag();
       try {
         canvas.releasePointerCapture(e.pointerId);
@@ -3453,6 +3579,7 @@
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
+      if (!canMoveCamera(PTR.step)) return;
       PTR.cam.zoom(e.deltaY);
       PTR.settings.camera_distance = PTR.cam.distance;
       syncControls();
@@ -3594,14 +3721,19 @@
   function setStep(id) {
     if (stepIndex(id) < 0 || !PTR.dialog) return;
     const wasTrace = isTraceStep(PTR.step);
+    const trace = isTraceStep(id);
+    if (trace && !wasTrace) {
+      PTR.lockedCamera = PTR.cam.state();
+      PTR.interacting = false;
+    }
     PTR.step = id;
+    PTR.nodes.frame.dataset.step = id;
     for (const step of STEPS) {
       const active = step.id === id;
       PTR.nodes.navButtons[step.id].classList.toggle("active", active);
       PTR.nodes.navButtons[step.id].setAttribute("aria-current", active ? "step" : "false");
       PTR.nodes.stagePanes[step.id].hidden = !active;
     }
-    const trace = isTraceStep(id);
     PTR.nodes.canvas.style.display = trace ? "block" : "none";
     PTR.nodes.rasterCanvas.style.display = trace ? "none" : "block";
     PTR.nodes.overlay.style.display = trace ? "" : "none";
@@ -3624,6 +3756,7 @@
           showError(err);
         }
       } else {
+        if (!wasTrace) PTR.tracer.setCamera(PTR.lockedCamera);
         if (!PTR.open) resumeRenderer();
         if (id === "preview" || !PTR.finalStarted) {
           if (PTR.settings.render_mode !== "preview") PTR.tracer.reset();
@@ -3683,7 +3816,7 @@
       applyResolution();
       tracer.setEnvironment(PTR.settings, PTR.customEnv);
       rebuildScene();
-      tracer.setCamera(PTR.cam.state());
+      tracer.setCamera(PTR.lockedCamera || PTR.cam.state());
       if (window.ResizeObserver) {
         PTR.resizeObs = new ResizeObserver(() => {
           if (PTR.settings.res_mode === "fit") applyResolution();
@@ -3745,9 +3878,11 @@
     setTimeout(() => {
       try {
         if (PTR.dialog && PTR.dialog.object) PTR.dialog.object.classList.add("ptr_dialog_root");
-        PTR.step = "camera";
+        PTR.step = "materials";
         PTR.finalStarted = false;
+        PTR.lockedCamera = null;
         PTR.raster = new RasterPreview(PTR.nodes.rasterCanvas);
+        if (typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
         PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
         PTR.onSettingChanged = (key) => {
           if (key === "res_width" || key === "res_height") fitFrame();
@@ -3766,7 +3901,7 @@
         PTR.onSettingsLoaded = syncSettingsToView;
         PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
         PTR.frameResizeObs.observe(PTR.nodes.viewport);
-        setStep("camera");
+        setStep("materials");
       } catch (err) {
         showError(err);
         if (PTR.nodes.overlay) {
@@ -3778,6 +3913,7 @@
   function closeWindow() {
     clearTimeout(PTR.interactTimer);
     clearTimeout(PTR.rebuildTimer);
+    clearTimeout(PTR.rasterRefreshTimer);
     closeRenderer();
     if (PTR.raster) {
       PTR.raster.dispose();
@@ -3793,17 +3929,167 @@
     PTR.needsRebuild = false;
     PTR.refreshMaterialList = null;
     PTR.refreshGroundTextures = null;
+    PTR.lockedCamera = null;
+    PTR.selectedGroupUuid = null;
     PTR.controls = [];
     PTR.nodes = {};
   }
 
   // plugins/georenderer/src/assets/georenderer.css
-  var georenderer_default = "\n#ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }\n#ptr_root * { box-sizing: border-box; }\n#ptr_step_nav { display: flex; gap: 6px; padding: 9px 12px; background: var(--color-ui); border-bottom: 1px solid var(--color-border); }\n.ptr_step { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 5px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-back); color: var(--color-text); cursor: pointer; font-size: 12px; }\n.ptr_step:hover { background: var(--color-selected); }\n.ptr_step.active { border-color: var(--color-accent); color: var(--color-light); box-shadow: inset 0 -2px var(--color-accent); }\n.ptr_step_number { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: var(--color-selected); font-weight: 700; }\n.ptr_step.active .ptr_step_number { background: var(--color-accent); color: var(--color-accent_text); }\n#ptr_viewport {\n	flex: 1 1 auto; position: relative; background: #101014;\n	display: flex; align-items: center; justify-content: center; overflow: hidden;\n	min-width: 240px;\n}\n#ptr_frame { position: relative; flex: 0 0 auto; background: #20242b; overflow: hidden; }\n#ptr_frame canvas {\n	width: 100%; height: 100%; object-fit: contain;\n	image-rendering: auto; cursor: grab;\n	background-image: linear-gradient(45deg, #2a2a30 25%, transparent 25%),\n		linear-gradient(-45deg, #2a2a30 25%, transparent 25%),\n		linear-gradient(45deg, transparent 75%, #2a2a30 75%),\n		linear-gradient(-45deg, transparent 75%, #2a2a30 75%);\n	background-size: 16px 16px;\n	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;\n}\n#ptr_raster_canvas { position: absolute; inset: 0; }\n#ptr_canvas { position: absolute; inset: 0; }\n#ptr_viewport canvas.dragging { cursor: grabbing; }\n#ptr_overlay {\n	position: absolute; left: 8px; top: 8px; pointer-events: none;\n	font-size: 11px; color: #fff; text-shadow: 0 1px 3px #000;\n	background: rgba(0,0,0,0.45); padding: 3px 7px; border-radius: 3px;\n}\n#ptr_watermark {\n	position: absolute; left: 12px; bottom: 10px; pointer-events: none;\n	font-family: sans-serif; line-height: 1; white-space: nowrap;\n	text-shadow: 0 1px 3px rgba(0,0,0,0.6);\n}\n#ptr_sidebar {\n	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;\n	background: var(--color-ui); border-left: 1px solid var(--color-border);\n}\n.ptr_stagepanes { flex: 1 1 auto; overflow-y: auto; padding: 10px; min-width: 0; }\n.ptr_stagepane[hidden] { display: none; }\n.ptr_summary { display: grid; gap: 6px; margin: 4px 0 10px; }\n.ptr_summary_line { padding: 6px 8px; border-radius: 4px; background: var(--color-ui); font-size: 11px; line-height: 1.4; color: var(--color-text); }\n.ptr_time { display: block; padding: 2px 0 2px 104px; color: var(--color-light); font-variant-numeric: tabular-nums; }\n.ptr_btn:disabled { opacity: 0.45; cursor: not-allowed; }\n.ptr_tabs {\n	flex: 0 0 42px; display: flex; flex-direction: column; align-items: stretch;\n	padding: 6px 0; gap: 2px; background: var(--color-back);\n	border-right: 1px solid var(--color-border); overflow-y: auto;\n}\n.ptr_tab {\n	width: 100%; min-width: 0; height: 38px; display: flex; align-items: center; justify-content: center;\n	background: transparent; border: none; cursor: pointer; position: relative;\n	color: var(--color-subtle_text); padding: 0; box-shadow: none;\n}\n.ptr_tab .material-icons { font-size: 19px; max-width: 19px; }\n.ptr_tab:hover { color: var(--color-text); background: var(--color-selected); }\n.ptr_tab.active { color: var(--color-light); background: var(--color-selected); }\n.ptr_tab.active::before {\n	content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;\n	background: var(--color-accent); border-radius: 0 2px 2px 0;\n}\n.ptr_tabpanes { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 10px; min-width: 0; }\n.ptr_tabpane { display: none; }\n.ptr_tabpane.active { display: block; }\n.ptr_card {\n	background: var(--color-back); border: 1px solid var(--color-border);\n	border-radius: 6px; padding: 9px 10px 10px; margin-bottom: 10px;\n}\n.ptr_card_head {\n	display: flex; align-items: center; gap: 6px; margin-bottom: 7px;\n	font-size: 12px; font-weight: 600; color: var(--color-light);\n}\n.ptr_card_head .material-icons { font-size: 16px; max-width: 16px; opacity: 0.85; }\n.ptr_row {\n	display: flex; align-items: center; gap: 6px; margin: 5px 0; min-height: 22px;\n}\n.ptr_row > label { flex: 0 0 96px; font-size: 12px; color: var(--color-text); }\n.ptr_row > .ptr_ctrl { flex: 1 1 auto; display: flex; align-items: center; gap: 5px; min-width: 0; }\n.ptr_row input[type=range] { flex: 1 1 auto; min-width: 40px; }\n.ptr_row input[type=number] {\n	width: 56px; flex: 0 0 56px; background: var(--color-ui);\n	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;\n	padding: 1px 3px; font-size: 11px;\n}\n.ptr_row input[type=color] { width: 32px; height: 20px; padding: 0; border: 1px solid var(--color-border); background: none; border-radius: 3px; }\n.ptr_row input[type=text] {\n	flex: 1 1 auto; min-width: 0; background: var(--color-ui);\n	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;\n	padding: 2px 6px; font-size: 12px;\n}\n.ptr_row select {\n	flex: 1 1 auto; min-width: 0; background: var(--color-ui); color: var(--color-text);\n	border: 1px solid var(--color-border); border-radius: 3px; padding: 2px; font-size: 12px;\n}\n.ptr_note { font-size: 11px; color: var(--color-subtle_text); margin: 4px 2px 2px; line-height: 1.4; }\n#ptr_footer {\n	display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px;\n	border-top: 1px solid var(--color-border); background: var(--color-ui);\n}\n#ptr_progress { flex: 1 1 auto; height: 6px; background: var(--color-back); border-radius: 3px; overflow: hidden; margin: 0 8px; }\n#ptr_progress > div { height: 100%; width: 0%; background: var(--color-accent); transition: width .1s linear; }\n#ptr_status { width: 100%; font-size: 11px; color: var(--color-subtle_text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\n.ptr_btn {\n	background: var(--color-button); color: var(--color-text); border: 1px solid var(--color-border);\n	border-radius: 4px; padding: 4px 11px; cursor: pointer; font-size: 12px; white-space: nowrap;\n	display: inline-flex; align-items: center; gap: 5px;\n}\n.ptr_btn .material-icons { font-size: 15px; max-width: 15px; }\n.ptr_btn:hover { background: var(--color-selected); }\n.ptr_btn.accent { background: var(--color-accent); color: var(--color-accent_text); border-color: var(--color-accent); }\n.ptr_iconbtn {\n	width: 27px; min-width: 0; height: 27px; flex: 0 0 27px; display: flex; align-items: center; justify-content: center;\n	background: transparent; color: var(--color-text); border: 1px solid transparent;\n	border-radius: 4px; cursor: pointer; padding: 0; box-shadow: none;\n}\n.ptr_iconbtn .material-icons { font-size: 17px; max-width: 17px; }\n.ptr_iconbtn:hover { background: var(--color-selected); border-color: var(--color-border); }\n.ptr_presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }\n.ptr_presets .ptr_btn { padding: 2px 7px; font-size: 11px; }\n.ptr_dialog_root .dialog_content { margin: 0 !important; padding: 0 !important; overflow: hidden !important; height: 100% !important; max-height: none !important; box-sizing: border-box; }\n.ptr_dialog_root .dialog_wrapper { min-height: 0; }\n.ptr_dialog_root .dialog_handle { cursor: move; }\n#ptr_matlist { margin-top: 4px; }\n.ptr_mat {\n	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;\n	background: var(--color-ui);\n}\n.ptr_mat > .ptr_mat_head { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 3px; font-weight: 600; }\n.ptr_mat > .ptr_mat_head img { width: 20px; height: 20px; image-rendering: pixelated; background: #0006; border-radius: 3px; }\n";
+  var georenderer_default = `
+#ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }
+#ptr_root * { box-sizing: border-box; }
+#ptr_step_nav { display: flex; gap: 6px; padding: 9px 12px; background: var(--color-ui); border-bottom: 1px solid var(--color-border); }
+.ptr_step { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 5px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-back); color: var(--color-text); cursor: pointer; font-size: 12px; }
+.ptr_step:hover { background: var(--color-selected); }
+.ptr_step.active { border-color: var(--color-accent); color: var(--color-light); box-shadow: inset 0 -2px var(--color-accent); }
+.ptr_step_number { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: var(--color-selected); font-weight: 700; }
+.ptr_step.active .ptr_step_number { background: var(--color-accent); color: var(--color-accent_text); }
+#ptr_viewport {
+	flex: 1 1 auto; position: relative; background: #101014;
+	display: flex; align-items: center; justify-content: center; overflow: hidden;
+	min-width: 240px;
+}
+#ptr_frame { position: relative; flex: 0 0 auto; background: #20242b; overflow: hidden; }
+#ptr_frame canvas {
+	width: 100%; height: 100%; object-fit: contain;
+	image-rendering: auto; cursor: grab;
+	background-image: linear-gradient(45deg, #2a2a30 25%, transparent 25%),
+		linear-gradient(-45deg, #2a2a30 25%, transparent 25%),
+		linear-gradient(45deg, transparent 75%, #2a2a30 75%),
+		linear-gradient(-45deg, transparent 75%, #2a2a30 75%);
+	background-size: 16px 16px;
+	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+}
+#ptr_raster_canvas { position: absolute; inset: 0; }
+#ptr_canvas { position: absolute; inset: 0; }
+#ptr_frame[data-step="materials"] #ptr_raster_canvas { cursor: pointer; }
+#ptr_frame[data-step="preview"] #ptr_canvas,
+#ptr_frame[data-step="export"] #ptr_canvas { cursor: default; }
+#ptr_viewport canvas.dragging { cursor: grabbing; }
+#ptr_overlay {
+	position: absolute; left: 8px; top: 8px; pointer-events: none;
+	font-size: 11px; color: #fff; text-shadow: 0 1px 3px #000;
+	background: rgba(0,0,0,0.45); padding: 3px 7px; border-radius: 3px;
+}
+#ptr_watermark {
+	position: absolute; left: 12px; bottom: 10px; pointer-events: none;
+	font-family: sans-serif; line-height: 1; white-space: nowrap;
+	text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+}
+#ptr_sidebar {
+	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;
+	background: var(--color-ui); border-left: 1px solid var(--color-border);
+}
+.ptr_stagepanes { flex: 1 1 auto; overflow-y: auto; padding: 10px; min-width: 0; }
+.ptr_stagepane[hidden] { display: none; }
+.ptr_summary { display: grid; gap: 6px; margin: 4px 0 10px; }
+.ptr_summary_line { padding: 6px 8px; border-radius: 4px; background: var(--color-ui); font-size: 11px; line-height: 1.4; color: var(--color-text); }
+.ptr_time { display: block; padding: 2px 0 2px 104px; color: var(--color-light); font-variant-numeric: tabular-nums; }
+.ptr_btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ptr_tabs {
+	flex: 0 0 42px; display: flex; flex-direction: column; align-items: stretch;
+	padding: 6px 0; gap: 2px; background: var(--color-back);
+	border-right: 1px solid var(--color-border); overflow-y: auto;
+}
+.ptr_tab {
+	width: 100%; min-width: 0; height: 38px; display: flex; align-items: center; justify-content: center;
+	background: transparent; border: none; cursor: pointer; position: relative;
+	color: var(--color-subtle_text); padding: 0; box-shadow: none;
+}
+.ptr_tab .material-icons { font-size: 19px; max-width: 19px; }
+.ptr_tab:hover { color: var(--color-text); background: var(--color-selected); }
+.ptr_tab.active { color: var(--color-light); background: var(--color-selected); }
+.ptr_tab.active::before {
+	content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;
+	background: var(--color-accent); border-radius: 0 2px 2px 0;
+}
+.ptr_tabpanes { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 10px; min-width: 0; }
+.ptr_tabpane { display: none; }
+.ptr_tabpane.active { display: block; }
+.ptr_card {
+	background: var(--color-back); border: 1px solid var(--color-border);
+	border-radius: 6px; padding: 9px 10px 10px; margin-bottom: 10px;
+}
+.ptr_card_head {
+	display: flex; align-items: center; gap: 6px; margin-bottom: 7px;
+	font-size: 12px; font-weight: 600; color: var(--color-light);
+}
+.ptr_card_head .material-icons { font-size: 16px; max-width: 16px; opacity: 0.85; }
+.ptr_row {
+	display: flex; align-items: center; gap: 6px; margin: 5px 0; min-height: 22px;
+}
+.ptr_row > label { flex: 0 0 96px; font-size: 12px; color: var(--color-text); }
+.ptr_row > .ptr_ctrl { flex: 1 1 auto; display: flex; align-items: center; gap: 5px; min-width: 0; }
+.ptr_row input[type=range] { flex: 1 1 auto; min-width: 40px; }
+.ptr_row input[type=number] {
+	width: 56px; flex: 0 0 56px; background: var(--color-ui);
+	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;
+	padding: 1px 3px; font-size: 11px;
+}
+.ptr_row input[type=color] { width: 32px; height: 20px; padding: 0; border: 1px solid var(--color-border); background: none; border-radius: 3px; }
+.ptr_row input[type=text] {
+	flex: 1 1 auto; min-width: 0; background: var(--color-ui);
+	color: var(--color-text); border: 1px solid var(--color-border); border-radius: 3px;
+	padding: 2px 6px; font-size: 12px;
+}
+.ptr_row select {
+	flex: 1 1 auto; min-width: 0; background: var(--color-ui); color: var(--color-text);
+	border: 1px solid var(--color-border); border-radius: 3px; padding: 2px; font-size: 12px;
+}
+.ptr_note { font-size: 11px; color: var(--color-subtle_text); margin: 4px 2px 2px; line-height: 1.4; }
+#ptr_footer {
+	display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px;
+	border-top: 1px solid var(--color-border); background: var(--color-ui);
+}
+#ptr_progress { flex: 1 1 auto; height: 6px; background: var(--color-back); border-radius: 3px; overflow: hidden; margin: 0 8px; }
+#ptr_progress > div { height: 100%; width: 0%; background: var(--color-accent); transition: width .1s linear; }
+#ptr_status { width: 100%; font-size: 11px; color: var(--color-subtle_text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ptr_btn {
+	background: var(--color-button); color: var(--color-text); border: 1px solid var(--color-border);
+	border-radius: 4px; padding: 4px 11px; cursor: pointer; font-size: 12px; white-space: nowrap;
+	display: inline-flex; align-items: center; gap: 5px;
+}
+.ptr_btn .material-icons { font-size: 15px; max-width: 15px; }
+.ptr_btn:hover { background: var(--color-selected); }
+.ptr_btn.accent { background: var(--color-accent); color: var(--color-accent_text); border-color: var(--color-accent); }
+.ptr_iconbtn {
+	width: 27px; min-width: 0; height: 27px; flex: 0 0 27px; display: flex; align-items: center; justify-content: center;
+	background: transparent; color: var(--color-text); border: 1px solid transparent;
+	border-radius: 4px; cursor: pointer; padding: 0; box-shadow: none;
+}
+.ptr_iconbtn .material-icons { font-size: 17px; max-width: 17px; }
+.ptr_iconbtn:hover { background: var(--color-selected); border-color: var(--color-border); }
+.ptr_presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.ptr_presets .ptr_btn { padding: 2px 7px; font-size: 11px; }
+.ptr_dialog_root .dialog_content { margin: 0 !important; padding: 0 !important; overflow: hidden !important; height: 100% !important; max-height: none !important; box-sizing: border-box; }
+.ptr_dialog_root .dialog_wrapper { min-height: 0; }
+.ptr_dialog_root .dialog_handle { cursor: move; }
+#ptr_matlist { margin-top: 4px; }
+.ptr_outline { max-height: 280px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 3px; background: var(--color-ui); }
+.ptr_outline_row { display: flex; align-items: stretch; min-height: 25px; }
+.ptr_outline_disclosure { flex: 0 0 19px; width: 19px; border: 0; background: transparent; color: var(--color-text); cursor: pointer; padding: 0; }
+.ptr_outline_item { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; padding: 2px 5px; font-size: 12px; }
+.ptr_outline_item > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ptr_outline_item .material-icons { font-size: 15px; width: 17px; flex: 0 0 17px; color: var(--color-subtle_text); }
+.ptr_outline_item:hover, .ptr_outline_item.selected { background: var(--color-selected); }
+.ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
+.ptr_outline_element { opacity: 0.7; }
+.ptr_group_inspector { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--color-border); }
+.ptr_group_inspector_head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 6px; font-size: 12px; }
+.ptr_mat {
+	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;
+	background: var(--color-ui);
+}
+.ptr_mat > .ptr_mat_head { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 3px; font-weight: 600; }
+.ptr_mat > .ptr_mat_head img { width: 20px; height: 20px; image-rendering: pixelated; background: #0006; border-radius: 3px; }
+`;
 
   // plugins/georenderer/src/index.js
   var action = null;
   var cssHandle = null;
   var eventHandler = null;
+  var selectionHandler = null;
   Plugin.register(PLUGIN_ID, {
     title: "GeoRenderer",
     icon: "auto_awesome",
@@ -3870,6 +4156,10 @@
         Blockbench.on("finished_edit", eventHandler);
         Blockbench.on("undo", eventHandler);
         Blockbench.on("redo", eventHandler);
+        selectionHandler = () => {
+          if (PTR.nodes.groupList && typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
+        };
+        Blockbench.on("update_selection", selectionHandler);
       } catch (err) {
       }
     },
@@ -3896,6 +4186,13 @@
         } catch (err) {
         }
         eventHandler = null;
+      }
+      if (selectionHandler) {
+        try {
+          Blockbench.removeListener("update_selection", selectionHandler);
+        } catch (err) {
+        }
+        selectionHandler = null;
       }
     }
   });

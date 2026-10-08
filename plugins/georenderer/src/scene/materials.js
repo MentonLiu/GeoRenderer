@@ -32,11 +32,19 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 
 	const maxTexSize = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096, 8192);
 	const sizes = [];
+	const atlasIndex = new Map();
+	const addAtlasSource = (slot, key, width, height) => {
+		if (!atlasIndex.has(key)) {
+			atlasIndex.set(key, sizes.length);
+			sizes.push([width, height]);
+		}
+		slot.atlasIndex = atlasIndex.get(key);
+	};
 	slotList.forEach(slot => {
 		const tex = slot.texture;
 		slot.color = null; slot.mer = null; slot.normal = null;
 		slot.side = 'double';
-		if (!tex) { sizes.push([1, 1]); return; }
+		if (!tex) { addAtlasSource(slot, '__none__', 1, 1); return; }
 
 		let group = null;
 		try { group = tex.getGroup ? tex.getGroup() : null; } catch (err) { group = null; }
@@ -73,7 +81,7 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 		if (slot.emissiveMap) { w = Math.max(w, slot.emissiveMap.width); h = Math.max(h, slot.emissiveMap.height); }
 		w = clamp(w | 0, 1, maxTexSize);
 		h = clamp(h | 0, 1, maxTexSize);
-		sizes.push([w, h]);
+		addAtlasSource(slot, tex.uuid + '|' + (slotOv.emissive_map || ''), w, h);
 	});
 
 	const packed = packAtlas(sizes, maxTexSize);
@@ -96,9 +104,12 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 	atlasE.ctx.fillRect(0, 0, S, S);
 	atlasC.ctx.clearRect(0, 0, S, S);
 
-	slotList.forEach((slot, i) => {
-		const r = packed.rects[i];
+	const drawnSources = new Set();
+	slotList.forEach(slot => {
+		const r = packed.rects[slot.atlasIndex];
 		slot.rect = r;
+		if (drawnSources.has(slot.atlasIndex)) return;
+		drawnSources.add(slot.atlasIndex);
 		try {
 			if (slot.color) {
 				atlasC.ctx.clearRect(r.x, r.y, r.w, r.h);

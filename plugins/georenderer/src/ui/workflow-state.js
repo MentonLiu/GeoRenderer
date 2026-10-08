@@ -1,6 +1,7 @@
 export const STEPS = [
-	{ id: 'camera', label: '镜头与材质', icon: 'videocam' },
+	{ id: 'materials', label: '材质', icon: 'account_tree' },
 	{ id: 'scene', label: '场景', icon: 'landscape' },
+	{ id: 'camera', label: '相机', icon: 'videocam' },
 	{ id: 'preview', label: '预览渲染', icon: 'tune' },
 	{ id: 'export', label: '最终导出', icon: 'save_alt' },
 ];
@@ -11,6 +12,10 @@ export function stepIndex(id) {
 
 export function isTraceStep(id) {
 	return id === 'preview' || id === 'export';
+}
+
+export function canMoveCamera(id) {
+	return id === 'materials' || id === 'scene' || id === 'camera';
 }
 
 export function canExport(step, finalStarted, spp, finalSamples) {

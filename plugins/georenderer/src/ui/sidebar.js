@@ -91,6 +91,9 @@ export function buildSidebar() {
 	camBtns.appendChild(btnFrame);
 
 	const cameraCards = [
+		card('取景说明', 'lock', [
+			el('div', { class: 'ptr_note', text: '在左侧拖动、平移或缩放来确定镜头。进入第 4 步后镜头位置固定；要修改镜头请返回本步。' }),
+		]),
 		card('相机', 'videocam', [
 			camBtns,
 			rowCheck('正交投影', 'ortho'),
@@ -223,8 +226,8 @@ export function buildSidebar() {
 	PTR.nodes.matlist = el('div', { id: 'ptr_matlist' });
 	PTR.nodes.groupList = el('div', { id: 'ptr_grouplist' });
 	const materialCards = [
-		card('按组覆盖', 'account_tree', [
-			el('div', { class: 'ptr_note', text: '组级设置只影响该组及其子组中的模型；子组的设置会覆盖父组。不会修改 Blockbench 原模型材质。' }),
+		card('模型组大纲', 'account_tree', [
+			el('div', { class: 'ptr_note', text: '选择组或直接点击左侧模型部件。选中的组在下方单独编辑；子组可覆盖父组设置。' }),
 			PTR.nodes.groupList,
 		]),
 		card('材质默认值', 'palette', [
@@ -277,8 +280,9 @@ export function buildSidebar() {
 	];
 
 	const stages = buildStages([
-		{ id: 'camera', cards: [resolutionCard, ...cameraCards, ...materialCards] },
+		{ id: 'materials', cards: materialCards },
 		{ id: 'scene', cards: envCards },
+		{ id: 'camera', cards: [resolutionCard, ...cameraCards] },
 		{ id: 'preview', cards: [...renderCards, ...postCards] },
 		{ id: 'export', cards: buildExportPanel() },
 	]);

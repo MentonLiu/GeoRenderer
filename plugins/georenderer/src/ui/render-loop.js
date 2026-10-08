@@ -142,27 +142,11 @@ export function loop() {
 	}
 	PTR.lastPasses = 0;
 
-	if (PTR.cam.fov !== PTR.settings.fov || PTR.cam.ortho !== !!PTR.settings.ortho) {
-		PTR.cam.fov = PTR.settings.fov;
-		PTR.cam.ortho = !!PTR.settings.ortho;
-		t.reset();
-	}
-
-	if (PTR.settings.auto_sync) {
-		const before = PTR.cam.position().concat(PTR.cam.target);
-		if (PTR.cam.syncFromPreview()) {
-			const after = PTR.cam.position().concat(PTR.cam.target);
-			for (let i = 0; i < 6; i++) {
-				if (Math.abs(before[i] - after[i]) > 1e-4) { t.reset(); break; }
-			}
-		}
-	}
-
 	const maxSamples = currentMaxSamples();
 	if (t.spp >= maxSamples) return;
 
 	try {
-		t.setCameraOnly(PTR.cam.state());
+		t.setCameraOnly(PTR.lockedCamera || PTR.cam.state());
 		const passSettings = PTR.interacting ? interactiveSettings(PTR.settings) : PTR.settings;
 		const n = Math.min(PTR.passesPerFrame, maxSamples - t.spp);
 		if (n > 0 && t.beginFrame(passSettings, PTR.interacting)) {
