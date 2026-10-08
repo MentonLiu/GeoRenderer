@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildGroupList, groupUuidForElement, selectGroup } from '../plugins/georenderer/src/ui/group-panel.js';
+import { RasterPreview } from '../plugins/georenderer/src/ui/raster-preview.js';
 import { PTR } from '../plugins/georenderer/src/ui/state.js';
-import { attachWorkspacePicker } from '../plugins/georenderer/src/ui/workspace-picker.js';
 
 class Node {
 	constructor(tag) {
@@ -12,6 +12,7 @@ class Node {
 		this.events = {};
 		this.style = {};
 		this.className = '';
+		this.scrollIntoView = () => { this.scrolled = true; };
 		this.classList = { add: name => { this.className += ` ${name}`; } };
 	}
 	setAttribute(name, value) {
@@ -49,13 +50,12 @@ function descendants(node, predicate) {
 	]);
 }
 
-test('group outline selects one nested group and edits only that group', t => {
-	const previous = { document: globalThis.document, Group: globalThis.Group, Outliner: globalThis.Outliner, Preview: globalThis.Preview, step: PTR.step };
+test('animation-style outline contains groups only and preview picks their nearest group', t => {
+	const previous = { document: globalThis.document, Group: globalThis.Group, Outliner: globalThis.Outliner, step: PTR.step };
 	t.after(() => {
 		globalThis.document = previous.document;
 		globalThis.Group = previous.Group;
 		globalThis.Outliner = previous.Outliner;
-		globalThis.Preview = previous.Preview;
 		PTR.step = previous.step;
 		clearTimeout(PTR.rasterRefreshTimer);
 		PTR.raster = null;
@@ -76,48 +76,49 @@ test('group outline selects one nested group and edits only that group', t => {
 	const parent = new Group('parent', 'Parent');
 	const child = new Group('child', 'Child', parent);
 	child.children.push({ name: 'Cube' });
-	Group.all = [parent, child];
+	const child10 = new Group('child10', 'Child 10', parent);
+	const child2 = new Group('child2', 'Child 2', parent);
+	Group.all = [parent, child, child10, child2];
 	globalThis.Group = Group;
 	globalThis.Outliner = { root: [parent] };
-	PTR.nodes = { groupList: new Node('div') };
+	PTR.nodes = { groupList: new Node('div'), groupInspector: new Node('div'), materialSettings: { scrollTop: 100 } };
 	PTR.groupOverrides = {};
 	PTR.collapsedGroups.clear();
 	PTR.selectedGroupUuid = null;
 	PTR.raster = { highlightGroup() {}, refreshModel() {} };
 
 	buildGroupList();
-	assert.equal(descendants(PTR.nodes.groupList, node => node.className.includes('ptr_outline_row')).length, 3);
+	assert.deepEqual(descendants(PTR.nodes.groupList, node => node.className.includes('ptr_outline_row')).map(node => node.attributes['data-group-uuid']), ['parent', 'child', 'child2', 'child10']);
+	PTR.collapsedGroups.add('parent');
+	buildGroupList();
+	assert.equal(descendants(PTR.nodes.groupList, node => node.className.includes('ptr_outline_row')).length, 1);
 	selectGroup('child');
 	assert.equal(PTR.selectedGroupUuid, 'child');
-	assert.equal(descendants(PTR.nodes.groupList, node => node.className.split(' ').includes('ptr_group_inspector')).length, 1);
-	assert.equal(descendants(PTR.nodes.groupList, node => node.tag === 'strong')[0].textContent, 'Child');
-	const roughness = descendants(PTR.nodes.groupList, node => node.tag === 'input' && node.attributes.type === 'number')[0];
+	assert.equal(PTR.nodes.materialSettings.scrollTop, 0);
+	assert.equal(PTR.collapsedGroups.has('parent'), false);
+	assert.equal(PTR.nodes.groupList.querySelector('[data-group-uuid="child"]').scrolled, true);
+	assert.equal(descendants(PTR.nodes.groupInspector, node => node.className.split(' ').includes('ptr_group_inspector')).length, 1);
+	assert.equal(descendants(PTR.nodes.groupInspector, node => node.tag === 'strong')[0].textContent, 'Child');
+	const roughness = descendants(PTR.nodes.groupInspector, node => node.tag === 'input' && node.attributes.type === 'number')[0];
 	roughness.value = '0.28';
 	roughness.events.change();
 	assert.equal(PTR.groupOverrides.child.roughness, 0.28);
 	assert.equal(PTR.groupOverrides.parent, undefined);
-	const reset = descendants(PTR.nodes.groupList, node => node.tag === 'button' && node.textContent === '重置此组')[0];
+	const reset = descendants(PTR.nodes.groupInspector, node => node.tag === 'button' && node.textContent === '重置此组')[0];
 	reset.click();
 	assert.equal(PTR.groupOverrides.child, undefined);
 	assert.equal(groupUuidForElement({ parent: child }), 'child');
 
-	const target = {};
-	const handlers = new Map();
-	const eventRoot = {
-		addEventListener(name, handler) { handlers.set(name, handler); },
-		removeEventListener(name, handler) { assert.equal(handlers.get(name), handler); handlers.delete(name); },
+	const ray = { pointer: null, camera: null, setFromCamera(pointer, camera) { this.pointer = [...pointer.xy]; this.camera = camera; }, intersectObjects() { return [{ object: { userData: { georendererGroupChain: ['child', 'parent'] } } }]; } };
+	const preview = {
+		canvas: { getBoundingClientRect: () => ({ left: 10, top: 20, width: 200, height: 100 }) },
+		pointer: { xy: [], set(x, y) { this.xy = [x, y]; } },
+		activeCamera: { id: 'inspection' }, raycaster: ray, model: { children: [{}] },
 	};
-	globalThis.Preview = { all: [{ node: { contains: item => item === target }, raycast: () => ({ element: { parent: child } }) }] };
-	PTR.step = 'materials';
-	selectGroup(null);
-	const detach = attachWorkspacePicker(eventRoot);
-	handlers.get('pointerdown')({ button: 0, target, clientX: 20, clientY: 30 });
-	handlers.get('pointerup')({ button: 0, target, clientX: 21, clientY: 31 });
+	const picked = RasterPreview.prototype.pickGroupAt.call(preview, 110, 70);
+	assert.equal(picked, 'child');
+	assert.deepEqual(ray.pointer, [0, 0]);
+	selectGroup(picked);
 	assert.equal(PTR.selectedGroupUuid, 'child');
-	selectGroup(null);
-	handlers.get('pointerdown')({ button: 0, target, clientX: 20, clientY: 30 });
-	handlers.get('pointerup')({ button: 0, target, clientX: 50, clientY: 60 });
-	assert.equal(PTR.selectedGroupUuid, null);
-	detach();
-	assert.equal(handlers.size, 0);
+	assert.equal(PTR.nodes.groupList.querySelector('[data-group-uuid="child"]').scrolled, true);
 });

@@ -2,14 +2,6 @@
 #ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }
 #ptr_root * { box-sizing: border-box; }
 #ptr_step_nav { display: flex; gap: 6px; padding: 9px 12px; background: var(--color-ui); border-bottom: 1px solid var(--color-border); }
-.ptr_workspace_mode { min-height: 360px !important; }
-.ptr_workspace_mode #ptr_step_nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; padding: 5px; }
-.ptr_workspace_mode .ptr_step { flex-direction: column; gap: 2px; padding: 5px 1px; font-size: 10px; line-height: 1.2; }
-.ptr_workspace_mode .ptr_step_number { width: 18px; height: 18px; flex-basis: 18px; }
-.ptr_workspace_mode #ptr_root { min-height: 0; }
-.ptr_workspace_mode #ptr_viewport { display: none; }
-.ptr_workspace_mode #ptr_sidebar { width: 100%; flex: 1 1 auto; border-left: 0; }
-#panel_georenderer_workspace { overflow: hidden; }
 .ptr_step { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 5px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-back); color: var(--color-text); cursor: pointer; font-size: 12px; }
 .ptr_step:hover { background: var(--color-selected); }
 .ptr_step.active { border-color: var(--color-accent); color: var(--color-light); box-shadow: inset 0 -2px var(--color-accent); }
@@ -32,6 +24,7 @@
 	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
 }
 #ptr_raster_canvas { position: absolute; inset: 0; }
+#ptr_frame[data-step="materials"] #ptr_raster_canvas:not(.dragging) { cursor: pointer; }
 #ptr_canvas { position: absolute; inset: 0; }
 #ptr_frame[data-step="preview"] #ptr_canvas,
 #ptr_frame[data-step="export"] #ptr_canvas { cursor: default; }
@@ -50,8 +43,13 @@
 	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;
 	background: var(--color-ui); border-left: 1px solid var(--color-border);
 }
-.ptr_stagepanes { flex: 1 1 auto; overflow-y: auto; padding: 10px; min-width: 0; }
+.ptr_stagepanes { flex: 1 1 auto; overflow: hidden; padding: 10px; min-width: 0; }
+.ptr_stagepane { height: 100%; overflow-y: auto; }
+.ptr_stagepane[data-step="materials"] { display: flex; flex-direction: column; overflow: hidden; }
 .ptr_stagepane[hidden] { display: none; }
+.ptr_material_settings { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 2px; }
+.ptr_material_outline { flex: 0 0 32%; min-height: 150px; max-height: 260px; margin-bottom: 0; display: flex; flex-direction: column; }
+#ptr_grouplist { flex: 1 1 auto; min-height: 0; display: flex; }
 .ptr_summary { display: grid; gap: 6px; margin: 4px 0 10px; }
 .ptr_summary_line { padding: 6px 8px; border-radius: 4px; background: var(--color-ui); font-size: 11px; line-height: 1.4; color: var(--color-text); }
 .ptr_time { display: block; padding: 2px 0 2px 104px; color: var(--color-light); font-variant-numeric: tabular-nums; }
@@ -135,16 +133,19 @@
 .ptr_dialog_root .dialog_wrapper { min-height: 0; }
 .ptr_dialog_root .dialog_handle { cursor: move; }
 #ptr_matlist { margin-top: 4px; }
-.ptr_outline { max-height: 280px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 3px; background: var(--color-ui); }
-.ptr_outline_row { display: flex; align-items: stretch; min-height: 25px; }
-.ptr_outline_disclosure { flex: 0 0 19px; width: 19px; border: 0; background: transparent; color: var(--color-text); cursor: pointer; padding: 0; }
-.ptr_outline_item { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; padding: 2px 5px; font-size: 12px; }
-.ptr_outline_item > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.ptr_outline_item .material-icons { font-size: 15px; width: 17px; flex: 0 0 17px; color: var(--color-subtle_text); }
-.ptr_outline_item:hover, .ptr_outline_item.selected { background: var(--color-selected); }
-.ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
-.ptr_outline_element { opacity: 0.7; }
-.ptr_group_inspector { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--color-border); }
+#ptr_grouplist .ptr_outline { flex: 1 1 auto; min-height: 0; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 0; background: var(--color-ui); }
+#ptr_grouplist .ptr_outline_children { margin-left: 8px; padding-left: 0; border-left: 1px solid var(--color-border); }
+#ptr_grouplist .ptr_outline_row { display: flex; align-items: center; justify-content: flex-start; height: 19px; min-height: 19px; margin: 0; padding: 0; }
+#ptr_grouplist .ptr_outline_disclosure { display: flex; flex: 0 0 15px !important; align-items: center; justify-content: flex-start !important; width: 15px !important; min-width: 0 !important; height: 19px; min-height: 0; margin: 0 !important; padding: 0 !important; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--color-text); cursor: pointer; }
+#ptr_grouplist .ptr_outline_disclosure .material-icons { font-size: 15px; line-height: 19px; }
+#ptr_grouplist .ptr_outline_spacer { flex: 0 0 15px; width: 15px; }
+#ptr_grouplist .ptr_outline_item { display: flex; flex: 1 1 auto !important; align-items: center; justify-content: flex-start !important; gap: 2px; width: auto; min-width: 0 !important; height: 19px; min-height: 0; margin: 0 !important; padding: 0 !important; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--color-text); text-align: left !important; cursor: pointer; font-size: 12px; line-height: 19px; }
+#ptr_grouplist .ptr_outline_item > span { flex: 0 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
+#ptr_grouplist .ptr_outline_item .material-icons { font-size: 13px; width: 14px; flex: 0 0 14px; color: var(--color-subtle_text); }
+#ptr_grouplist .ptr_outline_row:hover, #ptr_grouplist .ptr_outline_row.selected { background: var(--color-selected); }
+#ptr_grouplist .ptr_outline_item:hover, #ptr_grouplist .ptr_outline_item.selected { background: transparent; }
+#ptr_grouplist .ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
+.ptr_group_inspector { margin: 0; padding: 0; }
 .ptr_group_inspector_head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 6px; font-size: 12px; }
 .ptr_mat {
 	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;

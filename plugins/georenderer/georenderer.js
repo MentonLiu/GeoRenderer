@@ -285,11 +285,10 @@
   };
   var PTR = {
     dialog: null,
-    panel: null,
-    workspaceScene: null,
     cameraInitialized: false,
     tracer: null,
     cam: new OrbitCam(),
+    inspectionCam: new OrbitCam(),
     settings: Object.assign({}, DEFAULTS),
     overrides: {},
     groupOverrides: {},
@@ -365,8 +364,11 @@
   function canMoveCamera(id) {
     return id === "camera";
   }
-  function isWorkspaceStep(id) {
+  function isInspectionStep(id) {
     return id === "materials" || id === "scene";
+  }
+  function canNavigatePreview(id) {
+    return isInspectionStep(id) || canMoveCamera(id);
   }
   function canExport(step, finalStarted, spp, finalSamples) {
     return step === "export" && !!finalStarted && spp >= Math.max(1, finalSamples);
@@ -2475,7 +2477,6 @@
           if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
           else if (PTR.tracer) PTR.needsRebuild = true;
           saveSettings();
-          PTR.workspaceScene?.refresh();
         } catch (err) {
           showError(err);
         }
@@ -2509,7 +2510,6 @@
             if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, PTR.customEnv);
             else if (PTR.tracer) PTR.needsRebuild = true;
             saveSettings();
-            PTR.workspaceScene?.refresh();
           } catch (err) {
             showError(err);
           }
@@ -2731,6 +2731,12 @@
   function isGroup(node) {
     return typeof Group !== "undefined" && node instanceof Group;
   }
+  var nameOrder = new Intl.Collator("zh-CN", { numeric: true, sensitivity: "base" });
+  function orderedGroups(nodes) {
+    return (nodes || []).filter(isGroup).sort(
+      (a, b) => nameOrder.compare(a.name || "", b.name || "") || String(a.uuid).localeCompare(String(b.uuid))
+    );
+  }
   function groupUuidForElement(element, allGroups = groups()) {
     const chain = groupChainForElement(element);
     return chain.find((uuid) => allGroups.some((group) => group.uuid === uuid)) || null;
@@ -2748,6 +2754,9 @@
     }
     if (PTR.raster) PTR.raster.highlightGroup(PTR.selectedGroupUuid);
     buildGroupList();
+    if (group && PTR.nodes.materialSettings) PTR.nodes.materialSettings.scrollTop = 0;
+    const selectedRow = PTR.nodes.groupList?.querySelector(`[data-group-uuid="${PTR.selectedGroupUuid}"]`);
+    selectedRow?.scrollIntoView?.({ block: "nearest" });
   }
   function changed(group, reset) {
     reset.disabled = false;
@@ -2783,7 +2792,7 @@
   function buildInspector(group) {
     const panel = el("div", { class: "ptr_group_inspector" });
     if (!group) {
-      panel.appendChild(el("div", { class: "ptr_note", text: "在左侧模型上点击部件，或在上方大纲中选择组，即可编辑该组材质。" }));
+      panel.appendChild(el("div", { class: "ptr_note", text: "点击左侧模型部件，或在下方大纲中选择组，即可编辑该组材质。" }));
       return panel;
     }
     const head = el("div", { class: "ptr_group_inspector_head" }, [
@@ -2812,58 +2821,68 @@
     panel.appendChild(makeRow("发光颜色", [color]));
     return panel;
   }
-  function appendOutline(host, nodes, depth, parentGroup) {
-    for (const node of nodes || []) {
-      if (isGroup(node)) {
-        const open = !PTR.collapsedGroups.has(node.uuid);
-        const row = el("div", { class: "ptr_outline_row", "data-group-uuid": node.uuid, style: { paddingLeft: `${depth * 14}px` } });
-        const disclosure = el("button", { type: "button", class: "ptr_outline_disclosure", "aria-label": `${open ? "折叠" : "展开"} ${node.name || "未命名组"}`, "aria-expanded": String(open), text: open ? "▾" : "▸" });
+  function appendOutline(host, nodes, depth) {
+    for (const node of orderedGroups(nodes)) {
+      const open = !PTR.collapsedGroups.has(node.uuid);
+      const childGroups = orderedGroups(node.children);
+      const branch = el("div", { class: "ptr_outline_branch" });
+      const selected = PTR.selectedGroupUuid === node.uuid;
+      const row = el("div", {
+        class: `ptr_outline_row${selected ? " selected" : ""}`,
+        role: "treeitem",
+        "data-group-uuid": node.uuid,
+        "aria-level": String(depth + 1),
+        "aria-selected": String(selected)
+      });
+      if (childGroups.length) {
+        const disclosure = el("button", { type: "button", class: "ptr_outline_disclosure", "aria-label": `${open ? "折叠" : "展开"} ${node.name || "未命名组"}`, "aria-expanded": String(open) }, [
+          el("i", { class: "material-icons", text: open ? "expand_more" : "chevron_right" })
+        ]);
         disclosure.addEventListener("click", () => {
           if (open) PTR.collapsedGroups.add(node.uuid);
           else PTR.collapsedGroups.delete(node.uuid);
           buildGroupList();
         });
-        const selected = PTR.selectedGroupUuid === node.uuid;
-        const button = el("button", { type: "button", class: `ptr_outline_item${selected ? " selected" : ""}`, "aria-selected": String(selected) }, [
-          el("i", { class: "material-icons", text: "folder" }),
-          el("span", { text: node.name || "未命名组" })
-        ]);
-        button.addEventListener("click", () => selectGroup(node.uuid));
-        row.append(disclosure, button);
-        if (PTR.groupOverrides[node.uuid]) row.classList.add("modified");
-        host.appendChild(row);
-        if (open) appendOutline(host, node.children, depth + 1, node);
-      } else if (parentGroup) {
-        const row = el("div", { class: "ptr_outline_row", style: { paddingLeft: `${depth * 14 + 20}px` } });
-        const button = el("button", { type: "button", class: "ptr_outline_item ptr_outline_element" }, [
-          el("i", { class: "material-icons", text: "view_in_ar" }),
-          el("span", { text: node.name || "未命名部件" })
-        ]);
-        button.addEventListener("click", () => selectGroup(parentGroup.uuid));
-        row.appendChild(button);
-        host.appendChild(row);
+        row.appendChild(disclosure);
+      } else {
+        row.appendChild(el("span", { class: "ptr_outline_spacer" }));
       }
+      const button = el("button", { type: "button", class: `ptr_outline_item${selected ? " selected" : ""}` }, [
+        el("i", { class: "material-icons", text: open && childGroups.length ? "folder_open" : "folder" }),
+        el("span", { text: node.name || "未命名组" })
+      ]);
+      button.addEventListener("click", () => selectGroup(node.uuid));
+      row.appendChild(button);
+      if (PTR.groupOverrides[node.uuid]) row.classList.add("modified");
+      branch.appendChild(row);
+      if (open && childGroups.length) {
+        const children = el("div", { class: "ptr_outline_children", role: "group" });
+        appendOutline(children, childGroups, depth + 1);
+        branch.appendChild(children);
+      }
+      host.appendChild(branch);
     }
   }
   function buildGroupList() {
     const host = PTR.nodes.groupList;
-    if (!host) return;
+    const inspector = PTR.nodes.groupInspector;
+    if (!host || !inspector) return;
     const all = groups();
     if (!all.some((group) => group.uuid === PTR.selectedGroupUuid)) PTR.selectedGroupUuid = null;
     const oldTree = host.querySelector(".ptr_outline");
     const scroll = oldTree ? oldTree.scrollTop : 0;
     host.replaceChildren();
+    inspector.replaceChildren(buildInspector(all.find((group) => group.uuid === PTR.selectedGroupUuid)));
     if (!all.length) {
       host.appendChild(el("div", { class: "ptr_note", text: "当前模型没有组；请先在 Blockbench 大纲中建立组。" }));
       return;
     }
     const tree = el("div", { class: "ptr_outline", role: "tree", "aria-label": "模型组大纲" });
     const root = typeof Outliner !== "undefined" ? Outliner.root : [];
-    appendOutline(tree, root, 0, null);
-    if (!tree.childElementCount) appendOutline(tree, all.filter((group) => !isGroup(group.parent)), 0, null);
+    appendOutline(tree, root, 0);
+    if (!tree.childElementCount) appendOutline(tree, all.filter((group) => !isGroup(group.parent)), 0);
     host.appendChild(tree);
     tree.scrollTop = scroll;
-    host.appendChild(buildInspector(all.find((group) => group.uuid === PTR.selectedGroupUuid)));
   }
 
   // plugins/georenderer/src/ui/settings-actions.js
@@ -3082,7 +3101,6 @@
       PTR.settings.ground_texture_uuid = select.value;
       saveSettings();
       if (PTR.raster) PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === select.value));
-      PTR.workspaceScene?.refresh();
       if (PTR.tracer) rebuildScene();
     });
     return makeRow("地面纹理", [select]);
@@ -3178,7 +3196,6 @@
         PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
         syncControls();
         saveSettings();
-        PTR.workspaceScene?.refresh();
         try {
           if (PTR.tracer && PTR.open) PTR.tracer.setEnvironment(PTR.settings, null);
           else if (PTR.tracer) PTR.needsRebuild = true;
@@ -3201,7 +3218,6 @@
           }
           syncControls();
           saveSettings();
-          PTR.workspaceScene?.refresh();
         } catch (err) {
           if (request === PTR.scenePresetRequest) PTR.nodes.sceneSource.textContent = "内置贴图读取失败，已使用程序化氛围";
         }
@@ -3286,11 +3302,9 @@
     ];
     PTR.nodes.matlist = el("div", { id: "ptr_matlist" });
     PTR.nodes.groupList = el("div", { id: "ptr_grouplist" });
-    const materialCards = [
-      card("模型组大纲", "account_tree", [
-        el("div", { class: "ptr_note", text: "选择组或直接点击左侧模型部件。选中的组在下方单独编辑；子组可覆盖父组设置。" }),
-        PTR.nodes.groupList
-      ]),
+    PTR.nodes.groupInspector = el("div", { id: "ptr_groupinspector" });
+    const materialSettings = el("div", { class: "ptr_material_settings" }, [
+      card("选中组的渲染参数", "tune", [PTR.nodes.groupInspector]),
       card("材质默认值", "palette", [
         rowSlider("默认粗糙度", "def_roughness", 0, 1, 0.01, 2),
         rowSlider("默认金属度", "def_metalness", 0, 1, 0.01, 2),
@@ -3305,7 +3319,14 @@
       card("逐纹理覆盖", "texture_add", [
         PTR.nodes.matlist
       ])
-    ];
+    ]);
+    PTR.nodes.materialSettings = materialSettings;
+    const outlineCard = card("模型组大纲", "account_tree", [
+      el("div", { class: "ptr_note", text: "文件夹表示模型组；点击左侧模型也会定位到对应组。" }),
+      PTR.nodes.groupList
+    ]);
+    outlineCard.classList.add("ptr_material_outline");
+    const materialCards = [materialSettings, outlineCard];
     const postCards = [
       card("色调映射", "tune", [
         rowSelect("色调映射", "tone_mapping", { none: "无", reinhard: "Reinhard", aces: "ACES", filmic: "Filmic", agx: "AgX" }),
@@ -3360,6 +3381,9 @@
       this.scene = new THREE.Scene();
       this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1e5);
       this.orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1e5);
+      this.raycaster = new THREE.Raycaster();
+      this.pointer = new THREE.Vector2();
+      this.activeCamera = this.camera;
       this.ambient = new THREE.AmbientLight(16777215, 1.2);
       this.sun = new THREE.DirectionalLight(16777215, 1.5);
       this.scene.add(this.ambient, this.sun);
@@ -3390,6 +3414,7 @@
         const mesh = element && element.mesh;
         if (!mesh || element.visibility === false || mesh.visible === false) continue;
         const clone = mesh.clone(true);
+        clone.userData.georendererSourceMesh = mesh;
         const groupChain = groupChainForElement(element);
         clone.traverse((object) => {
           object.userData.georendererGroupChain = groupChain;
@@ -3418,6 +3443,30 @@
       }
       this.model.updateMatrixWorld(true);
       this.highlightGroup(PTR.selectedGroupUuid);
+    }
+    syncModelPose() {
+      if (typeof Canvas !== "undefined" && Canvas.scene) Canvas.scene.updateMatrixWorld(true);
+      for (const clone of this.model.children) {
+        const source = clone.userData.georendererSourceMesh;
+        if (!source) continue;
+        clone.visible = source.visible;
+        clone.matrix.copy(source.matrixWorld);
+      }
+      this.model.updateMatrixWorld(true);
+    }
+    pickGroupAt(clientX, clientY) {
+      const rect = this.canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      this.pointer.set(
+        (clientX - rect.left) / rect.width * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1
+      );
+      this.raycaster.setFromCamera(this.pointer, this.activeCamera);
+      for (const hit of this.raycaster.intersectObjects(this.model.children, true)) {
+        const chain = hit.object.userData.georendererGroupChain;
+        if (chain?.length) return chain[0];
+      }
+      return null;
     }
     highlightGroup(uuid) {
       if (this.selectionHelper) {
@@ -3448,6 +3497,7 @@
       this.floor.material.needsUpdate = true;
     }
     draw() {
+      this.syncModelPose();
       const width = Math.max(1, this.canvas.clientWidth);
       const height = Math.max(1, this.canvas.clientHeight);
       if (this.width !== width || this.height !== height) {
@@ -3465,7 +3515,8 @@
           saveSettings();
         }
       }
-      const cam = PTR.cam.state();
+      const inspection = PTR.step === "materials" || PTR.step === "scene";
+      const cam = (inspection ? PTR.inspectionCam : PTR.cam).state();
       const target = cam.ortho ? this.orthoCamera : this.camera;
       if (cam.ortho) {
         const halfH = cam.orthoHalfHeight;
@@ -3480,9 +3531,11 @@
       target.updateProjectionMatrix();
       target.position.set(...cam.pos);
       target.lookAt(...cam.target);
-      this.grid.visible = false;
-      this.floor.visible = !!settings2.ground_on && !(settings2.ground_radius > 0);
-      this.groundDisk.visible = !!settings2.ground_on && settings2.ground_radius > 0;
+      target.updateMatrixWorld(true);
+      this.activeCamera = target;
+      this.grid.visible = PTR.step === "materials";
+      this.floor.visible = !this.grid.visible && !!settings2.ground_on && !(settings2.ground_radius > 0);
+      this.groundDisk.visible = !this.grid.visible && !!settings2.ground_on && settings2.ground_radius > 0;
       this.floor.position.y = settings2.ground_y;
       this.groundDisk.position.y = settings2.ground_y;
       if (this.groundDisk.visible) this.groundDisk.scale.setScalar(settings2.ground_radius);
@@ -3502,7 +3555,7 @@
       this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
       this.sun.intensity = Math.max(0, settings2.sun_intensity / 4);
       this.sun.color.set(settings2.sun_color);
-      this.scene.background = settings2.bg_mode === "transparent" ? null : PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
+      this.scene.background = this.grid.visible ? new THREE.Color("#20242b") : settings2.bg_mode === "transparent" ? null : PTR.sceneCubemap && settings2.bg_mode === "env" ? PTR.sceneCubemap : new THREE.Color(settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
       this.renderer.render(this.scene, target);
     }
     start() {
@@ -3534,189 +3587,22 @@
     }
   };
 
-  // plugins/georenderer/src/ui/workspace-scene.js
-  var WorkspaceScene = class {
-    constructor() {
-      this.scene = null;
-      this.ambient = new THREE.AmbientLight(16777215, 0);
-      this.sun = new THREE.DirectionalLight(16777215, 0);
-      this.ground = new THREE.Mesh(
-        new THREE.PlaneGeometry(2e3, 2e3),
-        new THREE.MeshStandardMaterial({ color: 16777215, roughness: 0.9 })
-      );
-      this.ground.rotation.x = -Math.PI / 2;
-      this.ground.receiveShadow = true;
-      this.groundDisk = new THREE.Mesh(new THREE.CircleGeometry(1, 64), this.ground.material);
-      this.groundDisk.rotation.x = -Math.PI / 2;
-      this.groundDisk.receiveShadow = true;
-      this.groundMap = null;
-      this.groundTextureUuid = null;
-      this.environmentSource = null;
-      this.environmentTexture = null;
-      this.renderRequest = 0;
-    }
-    activate() {
-      const scene = typeof Canvas !== "undefined" && Canvas.scene;
-      if (!scene || this.scene === scene) return;
-      this.deactivate();
-      this.scene = scene;
-      this.originalBackground = scene.background;
-      this.originalEnvironment = scene.environment;
-      scene.add(this.ambient, this.sun, this.ground, this.groundDisk);
-      this.refresh();
-    }
-    refresh() {
-      if (!this.scene) return;
-      const s = PTR.settings;
-      const daylight = Math.max(0.08, Math.min(1, (Math.sin((s.time_of_day - 6) * Math.PI / 12) + 0.2) / 1.2));
-      const direction = sunDirection(s);
-      this.ambient.intensity = (0.2 + daylight) * Math.max(0, s.env_intensity);
-      this.sun.visible = !!s.sun_enable;
-      this.sun.intensity = Math.max(0, s.sun_intensity / 4);
-      this.sun.color.set(s.sun_color);
-      this.sun.position.set(direction[0] * 100, direction[1] * 100, direction[2] * 100);
-      this.ground.visible = !!s.ground_on && !(s.ground_radius > 0);
-      this.groundDisk.visible = !!s.ground_on && s.ground_radius > 0;
-      this.ground.position.y = s.ground_y;
-      this.groundDisk.position.y = s.ground_y;
-      if (this.groundDisk.visible) this.groundDisk.scale.setScalar(s.ground_radius);
-      this.ground.material.color.set(s.ground_color);
-      this.ground.material.roughness = s.ground_rough;
-      this.ground.material.metalness = s.ground_metal;
-      this.ground.material.transparent = !!s.ground_catcher;
-      this.ground.material.opacity = s.ground_catcher ? 0.25 : 1;
-      this.updateGroundTexture(s.ground_texture_uuid);
-      if (this.groundMap) {
-        const repeat = (s.ground_radius > 0 ? s.ground_radius * 2 : 2e3) / Math.max(0.01, s.ground_texture_scale || 1);
-        this.groundMap.repeat.set(repeat, repeat);
-      }
-      const environment = s.env_mode === "image" ? PTR.sceneCubemap || this.getEnvironmentTexture() : null;
-      this.appliedBackground = s.bg_mode === "transparent" ? null : s.bg_mode === "env" && environment ? environment : new THREE.Color(s.bg_mode === "color" ? s.bg_color : s.sky_horizon).multiplyScalar(s.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
-      this.scene.background = this.appliedBackground;
-      this.appliedEnvironment = environment || this.originalEnvironment;
-      this.scene.environment = this.appliedEnvironment;
-      this.requestRender();
-    }
-    getEnvironmentTexture() {
-      const source = PTR.customEnv;
-      if (!source?.data || !source.width || !source.height || typeof THREE.DataTexture === "undefined") return null;
-      if (source === this.environmentSource) return this.environmentTexture;
-      if (this.environmentTexture) this.environmentTexture.dispose();
-      const width = Math.min(source.width, 512);
-      const height = Math.min(source.height, 256);
-      const pixels = new Uint8Array(width * height * 4);
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const sx = Math.min(source.width - 1, Math.floor(x * source.width / width));
-          const sy = Math.min(source.height - 1, Math.floor(y * source.height / height));
-          const from = (sy * source.width + sx) * 4;
-          const to = (y * width + x) * 4;
-          for (let channel = 0; channel < 3; channel++) {
-            pixels[to + channel] = Math.round(Math.pow(Math.min(1, Math.max(0, source.data[from + channel])), 1 / 2.2) * 255);
-          }
-          pixels[to + 3] = 255;
-        }
-      }
-      const texture = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat);
-      texture.mapping = THREE.EquirectangularReflectionMapping;
-      if ("colorSpace" in texture && THREE.SRGBColorSpace) texture.colorSpace = THREE.SRGBColorSpace;
-      else if (THREE.sRGBEncoding) texture.encoding = THREE.sRGBEncoding;
-      texture.needsUpdate = true;
-      this.environmentSource = source;
-      this.environmentTexture = texture;
-      return texture;
-    }
-    updateGroundTexture(uuid) {
-      if (uuid === this.groundTextureUuid) {
-        if (this.groundMap) this.groundMap.needsUpdate = true;
-        return;
-      }
-      this.groundTextureUuid = uuid;
-      if (this.groundMap) this.groundMap.dispose();
-      const texture = (typeof Texture !== "undefined" && Texture.all || []).find((item) => item.uuid === uuid);
-      const image = texture && (texture.canvas || texture.img);
-      this.groundMap = image ? new THREE.Texture(image) : null;
-      if (this.groundMap) {
-        this.groundMap.wrapS = this.groundMap.wrapT = THREE.RepeatWrapping;
-        this.groundMap.needsUpdate = true;
-      }
-      this.ground.material.map = this.groundMap;
-      this.ground.material.needsUpdate = true;
-    }
-    requestRender() {
-      if (this.renderRequest) return;
-      this.renderRequest = requestAnimationFrame(() => {
-        this.renderRequest = 0;
-        if (!this.scene) return;
-        for (const preview of typeof Preview !== "undefined" && Preview.all || []) {
-          if (preview.node?.isConnected) preview.render();
-        }
-      });
-    }
-    deactivate() {
-      if (!this.scene) return;
-      if (this.scene.background === this.appliedBackground) this.scene.background = this.originalBackground;
-      if (this.scene.environment === this.appliedEnvironment) this.scene.environment = this.originalEnvironment;
-      this.scene.remove(this.ambient, this.sun, this.ground, this.groundDisk);
-      this.scene = null;
-      cancelAnimationFrame(this.renderRequest);
-      this.renderRequest = 0;
-      for (const preview of typeof Preview !== "undefined" && Preview.all || []) {
-        if (preview.node?.isConnected) preview.render();
-      }
-    }
-    dispose() {
-      this.deactivate();
-      this.ground.geometry.dispose();
-      this.groundDisk.geometry.dispose();
-      this.ground.material.dispose();
-      if (this.groundMap) this.groundMap.dispose();
-      if (this.environmentTexture) this.environmentTexture.dispose();
-    }
-  };
-
-  // plugins/georenderer/src/ui/workspace-picker.js
-  function attachWorkspacePicker(root = document) {
-    let down = null;
-    const onDown = (event) => {
-      if (PTR.step !== "materials" || event.button !== 0 || typeof Preview === "undefined") return;
-      const preview = (Preview.all || []).find((item) => item.node?.contains(event.target));
-      down = preview ? { preview, x: event.clientX, y: event.clientY } : null;
-    };
-    const onUp = (event) => {
-      if (!down || PTR.step !== "materials" || event.button !== 0) return;
-      const click = Math.hypot(event.clientX - down.x, event.clientY - down.y) <= 4;
-      const preview = down.preview;
-      down = null;
-      if (!click || !preview.node?.contains(event.target)) return;
-      try {
-        const hit = preview.raycast(event);
-        if (hit?.element) selectGroup(groupUuidForElement(hit.element));
-      } catch (err) {
-        console.warn("[GeoRenderer] 主视图拾取失败", err);
-      }
-    };
-    root.addEventListener("pointerdown", onDown, true);
-    root.addEventListener("pointerup", onUp, true);
-    return () => {
-      root.removeEventListener("pointerdown", onDown, true);
-      root.removeEventListener("pointerup", onUp, true);
-    };
-  }
-
   // plugins/georenderer/src/ui/window.js
   function attachViewportEvents(canvas) {
     let dragging = 0;
     let lastX = 0, lastY = 0;
     let startX = 0, startY = 0, moved = false;
+    const activeCamera = () => canMoveCamera(PTR.step) ? PTR.cam : PTR.inspectionCam;
     const endDrag = () => {
       dragging = 0;
       canvas.classList.remove("dragging");
-      clearTimeout(PTR.interactTimer);
-      PTR.interactTimer = setTimeout(() => setInteracting(false), 200);
+      if (canMoveCamera(PTR.step)) {
+        clearTimeout(PTR.interactTimer);
+        PTR.interactTimer = setTimeout(() => setInteracting(false), 200);
+      }
     };
     canvas.addEventListener("pointerdown", (e) => {
-      if (!canMoveCamera(PTR.step) || e.button > 2) return;
+      if (!canNavigatePreview(PTR.step) || e.button > 2) return;
       dragging = e.button === 0 && !e.shiftKey && !e.ctrlKey ? 1 : 2;
       lastX = startX = e.clientX;
       lastY = startY = e.clientY;
@@ -3729,17 +3615,24 @@
       if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) moved = true;
       if (!moved) return;
       canvas.classList.add("dragging");
-      clearTimeout(PTR.interactTimer);
-      setInteracting(true);
+      if (canMoveCamera(PTR.step)) {
+        clearTimeout(PTR.interactTimer);
+        setInteracting(true);
+      }
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
-      if (dragging === 1) PTR.cam.orbit(dx, dy);
-      else PTR.cam.pan(dx / Math.max(canvas.clientWidth, 1), dy / Math.max(canvas.clientHeight, 1), 1);
-      if (PTR.tracer) PTR.tracer.reset();
+      const camera = activeCamera();
+      if (dragging === 1) camera.orbit(dx, dy);
+      else camera.pan(dx / Math.max(canvas.clientWidth, 1), dy / Math.max(canvas.clientHeight, 1), 1);
+      if (canMoveCamera(PTR.step) && PTR.tracer) PTR.tracer.reset();
     });
     canvas.addEventListener("pointerup", (e) => {
+      if (dragging && !moved && PTR.step === "materials" && e.button === 0) {
+        const uuid = PTR.raster?.pickGroupAt(e.clientX, e.clientY);
+        if (uuid) selectGroup(uuid);
+      }
       endDrag();
       try {
         canvas.releasePointerCapture(e.pointerId);
@@ -3750,15 +3643,20 @@
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      if (!canMoveCamera(PTR.step)) return;
-      PTR.cam.zoom(e.deltaY);
-      PTR.settings.camera_distance = PTR.cam.distance;
-      syncControls();
-      saveSettings();
-      clearTimeout(PTR.interactTimer);
-      setInteracting(true);
-      PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
-      if (PTR.tracer) PTR.tracer.reset();
+      if (!canNavigatePreview(PTR.step)) return;
+      const camera = activeCamera();
+      camera.zoom(e.deltaY);
+      if (canMoveCamera(PTR.step)) {
+        PTR.settings.camera_distance = camera.distance;
+        syncControls();
+        saveSettings();
+      }
+      if (canMoveCamera(PTR.step)) {
+        clearTimeout(PTR.interactTimer);
+        setInteracting(true);
+        PTR.interactTimer = setTimeout(() => setInteracting(false), 250);
+        if (PTR.tracer) PTR.tracer.reset();
+      }
     }, { passive: false });
   }
   function buildWindow() {
@@ -3869,6 +3767,11 @@
     const width = viewport.clientWidth;
     const height = viewport.clientHeight;
     if (!width || !height) return;
+    if (isInspectionStep(PTR.step)) {
+      frame.style.width = `${width}px`;
+      frame.style.height = `${height}px`;
+      return;
+    }
     const aspect = Math.max(0.1, PTR.settings.res_width / Math.max(1, PTR.settings.res_height));
     const w = Math.min(width, height * aspect);
     frame.style.width = Math.floor(w) + "px";
@@ -3880,13 +3783,11 @@
     PTR.cam.distance = PTR.settings.camera_distance;
     if (PTR.raster) PTR.raster.setGroundTexture((typeof Texture !== "undefined" && Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
     if (PTR.nodes.timeDisplay) PTR.nodes.timeDisplay.textContent = formatClock(PTR.settings.time_of_day);
-    PTR.workspaceScene?.refresh();
     fitFrame();
     updateExportSummary();
   }
   function showRenderDialog() {
     if (PTR.dialog) return;
-    PTR.nodes.wrapper.classList.remove("ptr_workspace_mode");
     PTR.dialog = new Dialog("georenderer_dialog", {
       title: "GeoRenderer",
       width: 1180,
@@ -3911,29 +3812,10 @@
       const h = Math.round(clamp(window.innerHeight * 0.72, 420, window.innerHeight - 60));
       PTR.dialog.object.style.height = h + "px";
     }
-    PTR.panel.container.style.display = "none";
     if (!PTR.frameResizeObs && typeof ResizeObserver !== "undefined") {
       PTR.frameResizeObs = new ResizeObserver(() => fitFrame());
       PTR.frameResizeObs.observe(PTR.nodes.viewport);
     }
-  }
-  function showWorkspacePanel() {
-    if (PTR.dialog) {
-      PTR.dialog.hide();
-      PTR.panel.node.appendChild(PTR.nodes.wrapper);
-      PTR.dialog.delete();
-      PTR.dialog = null;
-      PTR.panel.container.style.display = "";
-    }
-    if (PTR.frameResizeObs) {
-      PTR.frameResizeObs.disconnect();
-      PTR.frameResizeObs = null;
-    }
-    if (PTR.raster) {
-      PTR.raster.dispose();
-      PTR.raster = null;
-    }
-    PTR.nodes.wrapper.classList.add("ptr_workspace_mode");
   }
   function initializeCamera() {
     if (PTR.cameraInitialized) return;
@@ -3954,20 +3836,10 @@
     PTR.nodes.btnStart.textContent = ready ? "重新渲染" : PTR.finalStarted ? "渲染中…" : "开始最终渲染";
   }
   function setStep(id) {
-    if (stepIndex(id) < 0 || !PTR.panel) return;
+    if (stepIndex(id) < 0 || !PTR.dialog) return;
     const wasTrace = isTraceStep(PTR.step);
     const trace = isTraceStep(id);
-    const workspace = isWorkspaceStep(id);
-    if (!workspace) {
-      initializeCamera();
-      PTR.workspaceScene?.deactivate();
-      showRenderDialog();
-      if (id === "camera") ensureRasterPreview();
-    } else {
-      if (wasTrace && PTR.tracer) pauseRenderer();
-      if (PTR.raster) PTR.raster.stop();
-      showWorkspacePanel();
-    }
+    if (id === "camera" || trace) initializeCamera();
     if (trace && !wasTrace) {
       PTR.lockedCamera = PTR.cam.state();
       PTR.interacting = false;
@@ -3981,7 +3853,7 @@
       PTR.nodes.stagePanes[step.id].hidden = !active;
     }
     PTR.nodes.canvas.style.display = trace ? "block" : "none";
-    PTR.nodes.rasterCanvas.style.display = id === "camera" ? "block" : "none";
+    PTR.nodes.rasterCanvas.style.display = trace ? "none" : "block";
     PTR.nodes.overlay.style.display = trace ? "" : "none";
     PTR.nodes.watermark.style.display = trace ? "" : "none";
     PTR.nodes.footer.style.display = trace ? "flex" : "none";
@@ -3991,8 +3863,6 @@
     PTR.nodes.btnBlockbench.style.display = id === "export" ? "" : "none";
     PTR.nodes.btnPause.style.display = id === "preview" || PTR.finalStarted ? "" : "none";
     PTR.nodes.toolGroup.style.display = id === "preview" ? "flex" : "none";
-    if (id === "scene") PTR.workspaceScene?.activate();
-    else PTR.workspaceScene?.deactivate();
     if (trace) {
       if (PTR.raster) PTR.raster.stop();
       if (!PTR.tracer) {
@@ -4020,7 +3890,7 @@
     } else {
       if (wasTrace && PTR.tracer) pauseRenderer();
       PTR.finalStarted = false;
-      if (id === "camera" && PTR.raster) PTR.raster.start();
+      PTR.raster?.start();
     }
     fitFrame();
     if (trace && PTR.tracer) applyResolution();
@@ -4083,26 +3953,26 @@
     }
   }
   function openWindow() {
-    if (typeof Panel === "undefined" || typeof Dialog === "undefined") return;
-    if (PTR.panel || PTR.dialog) closeWindow();
+    if (typeof Dialog === "undefined") return;
+    if (PTR.dialog) closeWindow();
     try {
       PTR.step = "materials";
       PTR.finalStarted = false;
       PTR.lockedCamera = null;
       PTR.cameraInitialized = false;
       PTR.cam = new OrbitCam();
-      const content = buildWindow();
-      PTR.panel = new Panel("georenderer_workspace", {
-        name: "GeoRenderer",
-        icon: "auto_awesome",
-        default_position: { slot: "right_bar", height: 600 },
-        growable: true,
-        resizable: true
-      });
-      PTR.panel.node.appendChild(content);
-      PTR.panel.selectTab();
-      PTR.workspaceScene = new WorkspaceScene();
-      PTR.detachWorkspacePicker = attachWorkspacePicker();
+      PTR.inspectionCam = new OrbitCam();
+      buildWindow();
+      showRenderDialog();
+      ensureRasterPreview();
+      if (!PTR.inspectionCam.syncFromPreview()) {
+        const bounds = new THREE.Box3().setFromObject(PTR.raster.model);
+        if (!bounds.isEmpty()) {
+          const center = bounds.getCenter(new THREE.Vector3());
+          const size = bounds.getSize(new THREE.Vector3());
+          PTR.inspectionCam.frameBounds({ center: center.toArray(), radius: size.length() / 2 });
+        }
+      }
       if (typeof Group !== "undefined" && Group.first_selected) selectGroup(Group.first_selected.uuid);
       PTR.onSettingChanged = (key) => {
         if (key === "res_width" || key === "res_height") fitFrame();
@@ -4115,7 +3985,6 @@
           syncControls();
         }
         if (key === "ground_texture_uuid" && PTR.raster) PTR.raster.setGroundTexture((Texture.all || []).find((texture) => texture.uuid === PTR.settings.ground_texture_uuid));
-        PTR.workspaceScene?.refresh();
         updateExportSummary();
       };
       PTR.onRenderStatus = updateExportActions;
@@ -4131,12 +4000,6 @@
     clearTimeout(PTR.rebuildTimer);
     clearTimeout(PTR.rasterRefreshTimer);
     closeRenderer();
-    PTR.detachWorkspacePicker?.();
-    PTR.detachWorkspacePicker = null;
-    if (PTR.workspaceScene) {
-      PTR.workspaceScene.dispose();
-      PTR.workspaceScene = null;
-    }
     if (PTR.raster) {
       PTR.raster.dispose();
       PTR.raster = null;
@@ -4152,10 +4015,6 @@
       } catch (err) {
       }
       PTR.dialog = null;
-    }
-    if (PTR.panel) {
-      PTR.panel.delete();
-      PTR.panel = null;
     }
     PTR.onSettingChanged = null;
     PTR.onRenderStatus = null;
@@ -4175,14 +4034,6 @@
 #ptr_root { display: flex; height: 100%; min-height: 480px; gap: 0; }
 #ptr_root * { box-sizing: border-box; }
 #ptr_step_nav { display: flex; gap: 6px; padding: 9px 12px; background: var(--color-ui); border-bottom: 1px solid var(--color-border); }
-.ptr_workspace_mode { min-height: 360px !important; }
-.ptr_workspace_mode #ptr_step_nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; padding: 5px; }
-.ptr_workspace_mode .ptr_step { flex-direction: column; gap: 2px; padding: 5px 1px; font-size: 10px; line-height: 1.2; }
-.ptr_workspace_mode .ptr_step_number { width: 18px; height: 18px; flex-basis: 18px; }
-.ptr_workspace_mode #ptr_root { min-height: 0; }
-.ptr_workspace_mode #ptr_viewport { display: none; }
-.ptr_workspace_mode #ptr_sidebar { width: 100%; flex: 1 1 auto; border-left: 0; }
-#panel_georenderer_workspace { overflow: hidden; }
 .ptr_step { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 5px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-back); color: var(--color-text); cursor: pointer; font-size: 12px; }
 .ptr_step:hover { background: var(--color-selected); }
 .ptr_step.active { border-color: var(--color-accent); color: var(--color-light); box-shadow: inset 0 -2px var(--color-accent); }
@@ -4205,6 +4056,7 @@
 	background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
 }
 #ptr_raster_canvas { position: absolute; inset: 0; }
+#ptr_frame[data-step="materials"] #ptr_raster_canvas:not(.dragging) { cursor: pointer; }
 #ptr_canvas { position: absolute; inset: 0; }
 #ptr_frame[data-step="preview"] #ptr_canvas,
 #ptr_frame[data-step="export"] #ptr_canvas { cursor: default; }
@@ -4223,8 +4075,13 @@
 	width: 360px; flex: 0 0 360px; display: flex; min-height: 0;
 	background: var(--color-ui); border-left: 1px solid var(--color-border);
 }
-.ptr_stagepanes { flex: 1 1 auto; overflow-y: auto; padding: 10px; min-width: 0; }
+.ptr_stagepanes { flex: 1 1 auto; overflow: hidden; padding: 10px; min-width: 0; }
+.ptr_stagepane { height: 100%; overflow-y: auto; }
+.ptr_stagepane[data-step="materials"] { display: flex; flex-direction: column; overflow: hidden; }
 .ptr_stagepane[hidden] { display: none; }
+.ptr_material_settings { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 2px; }
+.ptr_material_outline { flex: 0 0 32%; min-height: 150px; max-height: 260px; margin-bottom: 0; display: flex; flex-direction: column; }
+#ptr_grouplist { flex: 1 1 auto; min-height: 0; display: flex; }
 .ptr_summary { display: grid; gap: 6px; margin: 4px 0 10px; }
 .ptr_summary_line { padding: 6px 8px; border-radius: 4px; background: var(--color-ui); font-size: 11px; line-height: 1.4; color: var(--color-text); }
 .ptr_time { display: block; padding: 2px 0 2px 104px; color: var(--color-light); font-variant-numeric: tabular-nums; }
@@ -4308,16 +4165,19 @@
 .ptr_dialog_root .dialog_wrapper { min-height: 0; }
 .ptr_dialog_root .dialog_handle { cursor: move; }
 #ptr_matlist { margin-top: 4px; }
-.ptr_outline { max-height: 280px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 3px; background: var(--color-ui); }
-.ptr_outline_row { display: flex; align-items: stretch; min-height: 25px; }
-.ptr_outline_disclosure { flex: 0 0 19px; width: 19px; border: 0; background: transparent; color: var(--color-text); cursor: pointer; padding: 0; }
-.ptr_outline_item { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; padding: 2px 5px; font-size: 12px; }
-.ptr_outline_item > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.ptr_outline_item .material-icons { font-size: 15px; width: 17px; flex: 0 0 17px; color: var(--color-subtle_text); }
-.ptr_outline_item:hover, .ptr_outline_item.selected { background: var(--color-selected); }
-.ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
-.ptr_outline_element { opacity: 0.7; }
-.ptr_group_inspector { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--color-border); }
+#ptr_grouplist .ptr_outline { flex: 1 1 auto; min-height: 0; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 0; background: var(--color-ui); }
+#ptr_grouplist .ptr_outline_children { margin-left: 8px; padding-left: 0; border-left: 1px solid var(--color-border); }
+#ptr_grouplist .ptr_outline_row { display: flex; align-items: center; justify-content: flex-start; height: 19px; min-height: 19px; margin: 0; padding: 0; }
+#ptr_grouplist .ptr_outline_disclosure { display: flex; flex: 0 0 15px !important; align-items: center; justify-content: flex-start !important; width: 15px !important; min-width: 0 !important; height: 19px; min-height: 0; margin: 0 !important; padding: 0 !important; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--color-text); cursor: pointer; }
+#ptr_grouplist .ptr_outline_disclosure .material-icons { font-size: 15px; line-height: 19px; }
+#ptr_grouplist .ptr_outline_spacer { flex: 0 0 15px; width: 15px; }
+#ptr_grouplist .ptr_outline_item { display: flex; flex: 1 1 auto !important; align-items: center; justify-content: flex-start !important; gap: 2px; width: auto; min-width: 0 !important; height: 19px; min-height: 0; margin: 0 !important; padding: 0 !important; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--color-text); text-align: left !important; cursor: pointer; font-size: 12px; line-height: 19px; }
+#ptr_grouplist .ptr_outline_item > span { flex: 0 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
+#ptr_grouplist .ptr_outline_item .material-icons { font-size: 13px; width: 14px; flex: 0 0 14px; color: var(--color-subtle_text); }
+#ptr_grouplist .ptr_outline_row:hover, #ptr_grouplist .ptr_outline_row.selected { background: var(--color-selected); }
+#ptr_grouplist .ptr_outline_item:hover, #ptr_grouplist .ptr_outline_item.selected { background: transparent; }
+#ptr_grouplist .ptr_outline_row.modified .ptr_outline_item::after { content: '●'; color: var(--color-accent); margin-left: auto; font-size: 9px; }
+.ptr_group_inspector { margin: 0; padding: 0; }
 .ptr_group_inspector_head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 6px; font-size: 12px; }
 .ptr_mat {
 	border: 1px solid var(--color-border); border-radius: 6px; margin: 6px 0; padding: 6px 8px;
@@ -4340,7 +4200,7 @@
     about: [
       "在 **视图 → GeoRenderer** 中打开",
       "",
-      "- 第 1、2 步使用 Blockbench 主工作区；第 3 步可拖拽取景",
+      "- 五步都在独立窗口中完成；前两步可检查模型，第 3 步确定最终镜头",
       "- 可载入 `.hdr` 或普通图片作为环境贴图",
       "- “阴影捕捉 + 背景透明” 可导出带投影的透明 PNG",
       "",
@@ -4361,7 +4221,7 @@
       }
       action = new Action("georenderer_open", {
         name: "GeoRenderer",
-        description: "在 Blockbench 工作区配置场景并渲染当前模型",
+        description: "在独立窗口配置场景并渲染当前模型",
         icon: "auto_awesome",
         category: "view",
         condition: () => typeof Project !== "undefined" && !!Project,
@@ -4379,7 +4239,6 @@
       }
       eventHandler = () => {
         if (PTR.raster) PTR.raster.refreshModel();
-        PTR.workspaceScene?.refresh();
         if (PTR.refreshGroundTextures) PTR.refreshGroundTextures();
         if (PTR.nodes.groupList) buildGroupList();
         if (PTR.nodes.matlist) buildMaterialList();

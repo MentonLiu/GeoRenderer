@@ -12,6 +12,9 @@ export class RasterPreview {
 		this.scene = new THREE.Scene();
 		this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000);
 		this.orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100000);
+		this.raycaster = new THREE.Raycaster();
+		this.pointer = new THREE.Vector2();
+		this.activeCamera = this.camera;
 		this.ambient = new THREE.AmbientLight(0xffffff, 1.2);
 		this.sun = new THREE.DirectionalLight(0xffffff, 1.5);
 		this.scene.add(this.ambient, this.sun);
@@ -43,6 +46,7 @@ export class RasterPreview {
 			const mesh = element && element.mesh;
 			if (!mesh || element.visibility === false || mesh.visible === false) continue;
 			const clone = mesh.clone(true);
+			clone.userData.georendererSourceMesh = mesh;
 			const groupChain = groupChainForElement(element);
 			clone.traverse(object => { object.userData.georendererGroupChain = groupChain; });
 			const override = resolveMaterialOverride(null, groupChain, null, PTR.groupOverrides);
@@ -69,6 +73,32 @@ export class RasterPreview {
 		}
 		this.model.updateMatrixWorld(true);
 		this.highlightGroup(PTR.selectedGroupUuid);
+	}
+
+	syncModelPose() {
+		if (typeof Canvas !== 'undefined' && Canvas.scene) Canvas.scene.updateMatrixWorld(true);
+		for (const clone of this.model.children) {
+			const source = clone.userData.georendererSourceMesh;
+			if (!source) continue;
+			clone.visible = source.visible;
+			clone.matrix.copy(source.matrixWorld);
+		}
+		this.model.updateMatrixWorld(true);
+	}
+
+	pickGroupAt(clientX, clientY) {
+		const rect = this.canvas.getBoundingClientRect();
+		if (!rect.width || !rect.height) return null;
+		this.pointer.set(
+			((clientX - rect.left) / rect.width) * 2 - 1,
+			-((clientY - rect.top) / rect.height) * 2 + 1,
+		);
+		this.raycaster.setFromCamera(this.pointer, this.activeCamera);
+		for (const hit of this.raycaster.intersectObjects(this.model.children, true)) {
+			const chain = hit.object.userData.georendererGroupChain;
+			if (chain?.length) return chain[0];
+		}
+		return null;
 	}
 
 	highlightGroup(uuid) {
@@ -102,6 +132,7 @@ export class RasterPreview {
 	}
 
 	draw() {
+		this.syncModelPose();
 		const width = Math.max(1, this.canvas.clientWidth);
 		const height = Math.max(1, this.canvas.clientHeight);
 		if (this.width !== width || this.height !== height) {
@@ -118,7 +149,8 @@ export class RasterPreview {
 				saveSettings();
 			}
 		}
-		const cam = PTR.cam.state();
+		const inspection = PTR.step === 'materials' || PTR.step === 'scene';
+		const cam = (inspection ? PTR.inspectionCam : PTR.cam).state();
 		const target = cam.ortho ? this.orthoCamera : this.camera;
 		if (cam.ortho) {
 			const halfH = cam.orthoHalfHeight;
@@ -133,9 +165,11 @@ export class RasterPreview {
 		target.updateProjectionMatrix();
 		target.position.set(...cam.pos);
 		target.lookAt(...cam.target);
-		this.grid.visible = false;
-		this.floor.visible = !!settings.ground_on && !(settings.ground_radius > 0);
-		this.groundDisk.visible = !!settings.ground_on && settings.ground_radius > 0;
+		target.updateMatrixWorld(true);
+		this.activeCamera = target;
+		this.grid.visible = PTR.step === 'materials';
+		this.floor.visible = !this.grid.visible && !!settings.ground_on && !(settings.ground_radius > 0);
+		this.groundDisk.visible = !this.grid.visible && !!settings.ground_on && settings.ground_radius > 0;
 		this.floor.position.y = settings.ground_y;
 		this.groundDisk.position.y = settings.ground_y;
 		if (this.groundDisk.visible) this.groundDisk.scale.setScalar(settings.ground_radius);
@@ -155,7 +189,7 @@ export class RasterPreview {
 		this.sun.position.set(dir[0] * 100, dir[1] * 100, dir[2] * 100);
 		this.sun.intensity = Math.max(0, settings.sun_intensity / 4);
 		this.sun.color.set(settings.sun_color);
-		this.scene.background = settings.bg_mode === 'transparent' ? null
+		this.scene.background = this.grid.visible ? new THREE.Color('#20242b') : settings.bg_mode === 'transparent' ? null
 			: PTR.sceneCubemap && settings.bg_mode === 'env'
 			? PTR.sceneCubemap
 			: new THREE.Color(settings.bg_mode === 'color' ? settings.bg_color : settings.sky_horizon).multiplyScalar(settings.bg_mode === 'color' ? 1 : 0.12 + 0.88 * daylight);
