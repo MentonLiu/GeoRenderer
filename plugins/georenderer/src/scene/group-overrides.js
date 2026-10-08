@@ -19,3 +19,10 @@ export function resolveMaterialOverride(texture, groupChain, textureOverrides, g
 	}
 	return result;
 }
+
+export function resolveEmissionStrength(override, groupChain, groupOverrides, settings, fallback) {
+	const perPart = groupChain.some(id => groupOverrides?.[id]?.emissive != null);
+	// Part sliders set an absolute strength, just as their roughness/metalness sliders do.
+	// Preserve the prototype's multiplier for native emission and per-texture controls.
+	return Math.max(0, (override.emissive ?? fallback) * (perPart ? 1 : settings.emissive_strength));
+}

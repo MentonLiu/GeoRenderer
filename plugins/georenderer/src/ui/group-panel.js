@@ -121,7 +121,7 @@ function buildInspector(group) {
 		changed(group, reset);
 	});
 	panel.appendChild(makeRow('发光颜色', [color]));
-	panel.appendChild(el('div', { class: 'ptr_note', text: '强度保留发光贴图的遮罩；指定颜色可独立于表面颜色。光晕由“预览渲染”中的辉光控制。' }));
+	panel.appendChild(el('div', { class: 'ptr_note', text: '部位强度独立于纹理自发光倍率，并保留发光贴图遮罩。指定颜色可独立于表面颜色；光晕由第 4 步的泛光控制。' }));
 	return panel;
 }
 

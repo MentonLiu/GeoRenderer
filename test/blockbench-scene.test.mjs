@@ -112,7 +112,7 @@ test('scene cubemap conversion waits for Blockbench images to finish loading', a
 test('raster preview mirrors an independently enabled player model without an active scene', t => {
 	const originalModels = globalThis.PreviewModel;
 	t.after(() => { globalThis.PreviewModel = originalModels; });
-	const clone = { matrix: { copy(matrix) { this.source = matrix; } } };
+	const clone = { matrix: { copy(matrix) { this.source = matrix; } }, traverse() {} };
 	const root = {
 		isObject3D: true, uuid: 'player-root', children: [{ uuid: 'body' }], visible: true,
 		matrixWorld: { name: 'player-transform' },
