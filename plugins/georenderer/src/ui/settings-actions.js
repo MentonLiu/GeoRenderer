@@ -72,6 +72,7 @@ export function resetToDefaults() {
 	PTR.sceneCubemap = null;
 	PTR.customEnv = null;
 	PTR.customEnvName = '';
+	PTR.customEnvSource = '';
 	if (PTR.nodes.envName) PTR.nodes.envName.textContent = '(未载入)';
 	syncControls();
 	if (PTR.onSettingsLoaded) PTR.onSettingsLoaded();

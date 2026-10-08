@@ -46,6 +46,7 @@ export const PTR = {
 	scenePresetRequest: 0,
 	customEnv: null,
 	customEnvName: '',
+	customEnvSource: '',
 	open: false,
 	paused: false,
 	raf: 0,
