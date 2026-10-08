@@ -312,7 +312,8 @@ export function buildSidebar() {
 		card('材质默认值', 'palette', [
 			rowSlider('默认粗糙度', 'def_roughness', 0, 1, 0.01, 2),
 			rowSlider('默认金属度', 'def_metalness', 0, 1, 0.01, 2),
-			rowSlider('自发光强度', 'emissive_strength', 0, 40, 0.1, 2),
+			rowSlider('全局自发光倍率', 'emissive_strength', 0, 40, 0.1, 2),
+			el('div', { class: 'ptr_note', text: '部位与纹理的自发光强度都会乘以此倍率；0 会关闭所有自发光，1 保持设置的强度。' }),
 			rowSelect('渲染面', 'render_sides', { auto: '跟随 Blockbench', double: '强制双面', front: '强制单面' }),
 			el('div', { class: 'ptr_note', text: '跟随 Blockbench 时会按格式/纹理做背面剔除（Java 方块模型为单面），负尺寸方块因此只显示内部贴图，与视图一致。' }),
 			rowSelect('Alpha 模式', 'alpha_mode', { cutout: '裁剪（Minecraft）', blend: '混合（半透明）', opaque: '忽略透明' }),

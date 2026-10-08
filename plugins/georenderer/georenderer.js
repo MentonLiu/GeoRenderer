@@ -348,6 +348,10 @@
     } catch (err) {
     }
   }
+  function refreshRasterMaterials() {
+    clearTimeout(PTR.rasterRefreshTimer);
+    if (PTR.raster) PTR.rasterRefreshTimer = setTimeout(() => PTR.raster?.refreshModel(), 60);
+  }
 
   // plugins/georenderer/src/ui/workflow-state.js
   var STEPS = [
@@ -1022,8 +1026,7 @@
     for (let i = 0; i < out.length; i++) if (out[i] > 6e4) out[i] = 6e4;
     return out;
   }
-  function generateSkyPixels(settings2) {
-    const w = ENV_W, h = ENV_H;
+  function generateSkyPixels(settings2, w = ENV_W, h = ENV_H) {
     const out = new Float32Array(w * h * 4);
     const mode = settings2.env_mode;
     const zen = hexToLinear(settings2.sky_zenith);
@@ -2693,6 +2696,7 @@
     if (PTR.onSettingChanged) PTR.onSettingChanged(key);
     saveSettings();
     const kind = CHANGE_KIND[key] || "reset";
+    if (kind === "scene" || key === "filter_linear") refreshRasterMaterials();
     const t = PTR.tracer;
     if (!t) return;
     if (!PTR.open) {
@@ -2917,6 +2921,7 @@
           if (src !== "r") range.value = v;
           if (src !== "n") num.value = v;
           saveSettings();
+          refreshRasterMaterials();
           clearTimeout(PTR.rebuildTimer);
           PTR.rebuildTimer = setTimeout(() => rebuildScene(), 250);
         };
@@ -2951,6 +2956,7 @@
         else delete ov.emissive_map;
         emisColorSel.disabled = !ov.emissive_map;
         saveSettings();
+        refreshRasterMaterials();
         clearTimeout(PTR.rebuildTimer);
         PTR.rebuildTimer = setTimeout(() => rebuildScene(), 120);
       });
@@ -2958,12 +2964,14 @@
         ov.emissive_color_source = emisColorSel.value;
         emisColorRow.style.display = emisColorSel.value === "custom" ? "" : "none";
         saveSettings();
+        refreshRasterMaterials();
         clearTimeout(PTR.rebuildTimer);
         PTR.rebuildTimer = setTimeout(() => rebuildScene(), 120);
       });
       emisColorPicker.addEventListener("input", () => {
         ov.emissive_color = emisColorPicker.value;
         saveSettings();
+        refreshRasterMaterials();
         clearTimeout(PTR.rebuildTimer);
         PTR.rebuildTimer = setTimeout(() => rebuildScene(), 120);
       });
@@ -2982,6 +2990,7 @@
         if (amodeSel.value) ov.alpha_mode = amodeSel.value;
         else delete ov.alpha_mode;
         saveSettings();
+        refreshRasterMaterials();
         clearTimeout(PTR.rebuildTimer);
         PTR.rebuildTimer = setTimeout(() => rebuildScene(), 120);
       });
@@ -2990,6 +2999,7 @@
       reset.addEventListener("click", () => {
         delete PTR.overrides[tex.uuid];
         saveSettings();
+        refreshRasterMaterials();
         buildMaterialList();
         rebuildScene();
       });
@@ -3037,8 +3047,7 @@
     const row = PTR.nodes.groupList?.querySelector(`[data-group-uuid="${group.uuid}"]`);
     if (row) row.classList.add("modified");
     saveSettings();
-    clearTimeout(PTR.rasterRefreshTimer);
-    if (PTR.raster) PTR.rasterRefreshTimer = setTimeout(() => PTR.raster?.refreshModel(), 60);
+    refreshRasterMaterials();
     if (PTR.tracer) {
       clearTimeout(PTR.rebuildTimer);
       PTR.rebuildTimer = setTimeout(rebuildScene, 180);
@@ -3600,7 +3609,8 @@
       card("材质默认值", "palette", [
         rowSlider("默认粗糙度", "def_roughness", 0, 1, 0.01, 2),
         rowSlider("默认金属度", "def_metalness", 0, 1, 0.01, 2),
-        rowSlider("自发光强度", "emissive_strength", 0, 40, 0.1, 2),
+        rowSlider("全局自发光倍率", "emissive_strength", 0, 40, 0.1, 2),
+        el("div", { class: "ptr_note", text: "部位与纹理的自发光强度都会乘以此倍率；0 会关闭所有自发光，1 保持设置的强度。" }),
         rowSelect("渲染面", "render_sides", { auto: "跟随 Blockbench", double: "强制双面", front: "强制单面" }),
         el("div", { class: "ptr_note", text: "跟随 Blockbench 时会按格式/纹理做背面剔除（Java 方块模型为单面），负尺寸方块因此只显示内部贴图，与视图一致。" }),
         rowSelect("Alpha 模式", "alpha_mode", { cutout: "裁剪（Minecraft）", blend: "混合（半透明）", opaque: "忽略透明" }),
@@ -3664,12 +3674,197 @@
     return stages;
   }
 
+  // plugins/georenderer/src/ui/raster-materials.js
+  function linearColor(color, value) {
+    color.setRGB(...hexToLinear(value));
+  }
+  var RasterMaterials = class {
+    constructor(settings2, overrides, groupOverrides) {
+      this.settings = settings2;
+      this.overrides = overrides;
+      this.groupOverrides = groupOverrides;
+      this.materials = [];
+      this.textures = /* @__PURE__ */ new Map();
+      this.imageTextures = /* @__PURE__ */ new Map();
+      this.lookup = /* @__PURE__ */ new Map();
+      for (const texture of typeof Texture !== "undefined" && Texture.all || []) {
+        const material = texture.getMaterial?.() || texture.material;
+        if (material) this.lookup.set(material, texture);
+      }
+      for (const group of typeof TextureGroup !== "undefined" && TextureGroup.all || []) {
+        if (!group.is_material || !group.material) continue;
+        this.lookup.set(group.material, group.getTextures().find((t) => t.pbr_channel === "color"));
+      }
+    }
+    texture(image, encoding = THREE.sRGBEncoding, source = null) {
+      if (!image) return null;
+      const byEncoding = this.imageTextures.get(image) || /* @__PURE__ */ new Map();
+      const cached = byEncoding.get(encoding);
+      if (cached) return cached;
+      const copy = source?.clone ? source.clone() : new THREE.Texture(image);
+      copy.image = image;
+      copy.encoding = encoding;
+      copy.magFilter = this.settings.filter_linear ? THREE.LinearFilter : THREE.NearestFilter;
+      copy.minFilter = copy.magFilter;
+      copy.generateMipmaps = false;
+      copy.needsUpdate = true;
+      byEncoding.set(encoding, copy);
+      this.imageTextures.set(image, byEncoding);
+      this.textures.set(copy, copy);
+      return copy;
+    }
+    merMaps(texture, colorImage) {
+      const image = textureSource(texture);
+      if (!image) return {};
+      const key = `mer:${texture.uuid}`;
+      if (this.textures.has(key)) return this.textures.get(key);
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(image, 0, 0);
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const emission = document.createElement("canvas");
+      emission.width = canvas.width;
+      emission.height = canvas.height;
+      const ec = emission.getContext("2d", { willReadFrequently: true });
+      if (colorImage) ec.drawImage(colorImage, 0, 0, canvas.width, canvas.height);
+      else {
+        ec.fillStyle = "#ffffff";
+        ec.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      const ed = ec.getImageData(0, 0, canvas.width, canvas.height);
+      for (let i = 0; i < data.data.length; i += 4) {
+        const metal = data.data[i], power = data.data[i + 1] / 255, rough = data.data[i + 2];
+        data.data[i + 1] = rough;
+        data.data[i + 2] = metal;
+        for (let c = 0; c < 3; c++) ed.data[i + c] = Math.round(srgbToLinear(ed.data[i + c] / 255) * power * 255);
+      }
+      ctx.putImageData(data, 0, 0);
+      ec.putImageData(ed, 0, 0);
+      const maps = { surface: this.texture(canvas, THREE.LinearEncoding), emission: this.texture(emission, THREE.LinearEncoding) };
+      this.textures.set(key, maps);
+      return maps;
+    }
+    create(source, groupChain) {
+      const texture = this.lookup.get(source);
+      const ov = resolveMaterialOverride(texture, groupChain, this.overrides, this.groupOverrides);
+      const settings2 = this.settings;
+      const group = texture?.getGroup?.();
+      const channels = group?.is_material ? group.getTextures() : [];
+      const colorImage = textureSource(channels.find((t) => t.pbr_channel === "color") || texture);
+      const sourceMap = source.uniforms?.map?.value || source.map;
+      const map = this.texture(colorImage || sourceMap?.image, THREE.sRGBEncoding, sourceMap);
+      const material = ov.transmission > 0 ? new THREE.MeshPhysicalMaterial() : new THREE.MeshStandardMaterial();
+      material.map = map;
+      if (ov.color) linearColor(material.color, ov.color);
+      else if (!map && source.color) material.color.copy(source.color);
+      else material.color.set(map ? "#ffffff" : "#cccccc");
+      material.roughness = ov.roughness ?? settings2.def_roughness;
+      material.metalness = ov.metalness ?? settings2.def_metalness;
+      material.side = texture ? { front: THREE.FrontSide, back: THREE.BackSide, double: THREE.DoubleSide }[getMaterialSide(texture, settings2.render_sides)] : source.side;
+      material.visible = source.visible !== false;
+      material.skinning = !!source.skinning;
+      material.morphTargets = !!source.morphTargets;
+      material.morphNormals = !!source.morphNormals;
+      material.flatShading = !!source.flatShading;
+      const alphaMode = ov.alpha_mode || settings2.alpha_mode;
+      material.transparent = alphaMode === "blend";
+      material.depthWrite = !material.transparent;
+      material.alphaTest = alphaMode === "cutout" ? ov.alpha_cutoff ?? settings2.alpha_cutoff : 0;
+      material.opacity = source.opacity ?? 1;
+      material.vertexColors = !!source.vertexColors;
+      const mer = channels.find((t) => t.pbr_channel === "mer");
+      const maps = this.merMaps(mer, colorImage || sourceMap?.image);
+      if (maps.surface) {
+        if (ov.roughness == null) {
+          material.roughnessMap = maps.surface;
+          material.roughness = 1;
+        }
+        if (ov.metalness == null) {
+          material.metalnessMap = maps.surface;
+          material.metalness = 1;
+        }
+      }
+      const normal = channels.find((t) => t.pbr_channel === "normal");
+      material.normalMap = this.texture(textureSource(normal), THREE.LinearEncoding) || source.normalMap || null;
+      material.normalScale.setScalar(ov.normal_scale ?? 1);
+      const emissiveDefault = mer || texture?.render_mode === "emissive" || texture?.render_mode === "additive" ? 1 : 0;
+      material.emissiveIntensity = (ov.emissive ?? emissiveDefault) * settings2.emissive_strength;
+      linearColor(material.emissive, ov.emissive != null ? ov.emissive_color || "#ffffff" : "#ffffff");
+      material.emissive.multiply(material.color);
+      material.emissiveMap = ov.emissive != null ? map : maps.emission || map;
+      if (ov.emissive == null && !mer && ov.emissive_map) {
+        const image = textureSource((typeof Texture !== "undefined" && Texture.all || []).find((t) => t.uuid === ov.emissive_map));
+        material.emissiveMap = this.texture(image);
+      }
+      if (ov.transmission > 0) {
+        material.transmission = ov.transmission;
+        material.ior = ov.ior ?? 1.5;
+      }
+      this.materials.push(material);
+      return material;
+    }
+    dispose() {
+      for (const material of this.materials) material.dispose();
+      for (const texture of this.textures.values()) if (texture.isTexture) texture.dispose();
+      this.materials = [];
+      this.textures.clear();
+      this.imageTextures.clear();
+    }
+  };
+
+  // plugins/georenderer/src/ui/raster-environment.js
+  var ENV_KEYS = ["env_mode", "env_rotation", "time_of_day", "sky_zenith", "sky_horizon", "sky_ground", "sky_haze", "grad_top", "grad_bottom", "solid_color", "sun_enable", "sun_elevation", "sun_azimuth", "sun_angle", "sun_intensity", "sun_color"];
+  var RasterEnvironment = class {
+    constructor(renderer) {
+      this.pmrem = new THREE.PMREMGenerator(renderer);
+      this.target = null;
+      this.key = "";
+      this.source = null;
+    }
+    sync(settings2, customEnv) {
+      const source = settings2.env_mode === "image" ? customEnv : null;
+      const key = JSON.stringify(ENV_KEYS.map((k) => settings2[k]));
+      if (this.target && this.key === key && this.source === source) return this.target.texture;
+      const w = 256, h = 128;
+      const data = source ? resampleEquirect(source, w, h) : generateSkyPixels(settings2, w, h);
+      const rotated = new Float32Array(data.length);
+      const shift = Math.round((settings2.env_rotation || 0) / 360 * w);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const sx = ((x + shift) % w + w) % w;
+        rotated.set(data.subarray((y * w + sx) * 4, (y * w + sx) * 4 + 4), (y * w + x) * 4);
+      }
+      const texture = new THREE.DataTexture(rotated, w, h, THREE.RGBAFormat, THREE.FloatType);
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      texture.flipY = true;
+      texture.needsUpdate = true;
+      let target;
+      try {
+        target = this.pmrem.fromEquirectangular(texture);
+      } finally {
+        texture.dispose();
+      }
+      this.target?.dispose();
+      this.target = target;
+      this.key = key;
+      this.source = source;
+      return target.texture;
+    }
+    dispose() {
+      this.target?.dispose();
+      this.pmrem.dispose();
+    }
+  };
+
   // plugins/georenderer/src/ui/raster-preview.js
   var RasterPreview = class {
     constructor(canvas) {
       this.canvas = canvas;
       this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+      this.renderer.outputEncoding = THREE.sRGBEncoding;
+      this.environment = new RasterEnvironment(this.renderer);
       this.scene = new THREE.Scene();
       this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1e5);
       this.orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1e5);
@@ -3701,8 +3896,9 @@
     }
     refreshModel() {
       this.model.clear();
-      for (const material of this.ownedMaterials) material.dispose();
-      this.ownedMaterials = [];
+      this.materials?.dispose();
+      this.materials = new RasterMaterials(PTR.settings, PTR.overrides, PTR.groupOverrides);
+      this.ownedMaterials = this.materials.materials;
       if (typeof Canvas !== "undefined" && Canvas.scene) Canvas.scene.updateMatrixWorld(true);
       const elements = typeof Outliner !== "undefined" && Outliner.elements || [];
       for (const element of elements) {
@@ -3714,27 +3910,11 @@
         clone.traverse((object) => {
           object.userData.georendererGroupChain = groupChain;
         });
-        const override = resolveMaterialOverride(null, groupChain, null, PTR.groupOverrides);
-        if (Object.keys(override).length) {
-          clone.traverse((object) => {
-            if (!object.isMesh || !object.material) return;
-            const customize = (material) => {
-              const copy = material.clone();
-              for (const [key, uniform] of Object.entries(material.uniforms || {})) {
-                if (uniform.value?.isTexture && copy.uniforms?.[key]) copy.uniforms[key].value = uniform.value;
-              }
-              if (override.roughness != null && "roughness" in copy) copy.roughness = override.roughness;
-              if (override.metalness != null && "metalness" in copy) copy.metalness = override.metalness;
-              if (override.emissive != null && copy.emissive) {
-                copy.emissive.set(override.emissive_color || "#ffffff");
-                copy.emissiveIntensity = override.emissive;
-              }
-              this.ownedMaterials.push(copy);
-              return copy;
-            };
-            object.material = Array.isArray(object.material) ? object.material.map(customize) : customize(object.material);
-          });
-        }
+        clone.traverse((object) => {
+          if (!object.isMesh || !object.material) return;
+          const customize = (material) => this.materials.create(material, groupChain);
+          object.material = Array.isArray(object.material) ? object.material.map(customize) : customize(object.material);
+        });
         clone.matrix.copy(mesh.matrixWorld);
         clone.matrixAutoUpdate = false;
         this.model.add(clone);
@@ -3828,6 +4008,9 @@
         this.renderer.setSize(width, height, false);
       }
       const settings2 = PTR.settings;
+      this.renderer.toneMapping = { none: THREE.NoToneMapping, reinhard: THREE.ReinhardToneMapping, filmic: THREE.CineonToneMapping }[settings2.tone_mapping] ?? THREE.ACESFilmicToneMapping;
+      this.renderer.toneMappingExposure = settings2.exposure;
+      for (const material of this.ownedMaterials) material.envMapIntensity = settings2.env_intensity;
       if (settings2.auto_sync && PTR.step === "camera" && PTR.cam.syncFromPreview()) {
         if (settings2.fov !== PTR.cam.fov || settings2.ortho !== PTR.cam.ortho || settings2.camera_distance !== PTR.cam.distance) {
           settings2.fov = PTR.cam.fov;
@@ -3885,7 +4068,7 @@
       this.sun.intensity = Math.max(0, settings2.sun_intensity / 4);
       this.sun.color.set(settings2.sun_color);
       this.scene.fog = blockbenchScene?.fog || null;
-      this.scene.environment = blockbenchScene?.cubemap || null;
+      this.scene.environment = this.environment.sync(settings2, PTR.customEnv);
       this.scene.background = this.grid.visible ? new THREE.Color("#20242b") : settings2.bg_mode === "transparent" ? null : blockbenchScene?.cubemap && settings2.bg_mode === "env" ? blockbenchScene.cubemap : new THREE.Color(settings2.bg_mode === "color" ? settings2.bg_color : settings2.sky_horizon).multiplyScalar(settings2.bg_mode === "color" ? 1 : 0.12 + 0.88 * daylight);
       this.renderer.render(this.scene, target);
     }
@@ -3910,8 +4093,9 @@
       this.model.clear();
       this.previewModels.clear();
       this.previewModelSources = [];
-      for (const material of this.ownedMaterials) material.dispose();
+      this.materials?.dispose();
       this.ownedMaterials = [];
+      this.environment.dispose();
       this.floor.geometry.dispose();
       this.groundDisk.geometry.dispose();
       this.floor.material.dispose();

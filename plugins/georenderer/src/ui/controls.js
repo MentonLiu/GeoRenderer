@@ -1,7 +1,7 @@
 import { clamp } from '../core/math.js';
 import { el } from './dom.js';
 import { applyResolution, rebuildScene, showError, updateStatus } from './render-loop.js';
-import { CHANGE_KIND, PTR, saveSettings } from './state.js';
+import { CHANGE_KIND, PTR, refreshRasterMaterials, saveSettings } from './state.js';
 
 export function makeRow(label, ctrls) {
 	return el('div', { class: 'ptr_row' }, [
@@ -119,6 +119,7 @@ function onSettingChanged(key) {
 	if (PTR.onSettingChanged) PTR.onSettingChanged(key);
 	saveSettings();
 	const kind = CHANGE_KIND[key] || 'reset';
+	if (kind === 'scene' || key === 'filter_linear') refreshRasterMaterials();
 	const t = PTR.tracer;
 	if (!t) return;
 	if (!PTR.open) { PTR.needsRebuild = true; return; }
