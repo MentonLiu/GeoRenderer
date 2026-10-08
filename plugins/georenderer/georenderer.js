@@ -1469,6 +1469,14 @@
     }
     const maxTexSize = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096, 8192);
     const sizes = [];
+    const atlasIndex = /* @__PURE__ */ new Map();
+    const addAtlasSource = (slot, key, width, height) => {
+      if (!atlasIndex.has(key)) {
+        atlasIndex.set(key, sizes.length);
+        sizes.push([width, height]);
+      }
+      slot.atlasIndex = atlasIndex.get(key);
+    };
     slotList.forEach((slot) => {
       const tex = slot.texture;
       slot.color = null;
@@ -1476,7 +1484,7 @@
       slot.normal = null;
       slot.side = "double";
       if (!tex) {
-        sizes.push([1, 1]);
+        addAtlasSource(slot, "__none__", 1, 1);
         return;
       }
       let group = null;
@@ -1523,7 +1531,7 @@
       }
       w = clamp(w | 0, 1, maxTexSize);
       h = clamp(h | 0, 1, maxTexSize);
-      sizes.push([w, h]);
+      addAtlasSource(slot, tex.uuid + "|" + (slotOv.emissive_map || ""), w, h);
     });
     const packed = packAtlas(sizes, maxTexSize);
     if (!packed) throw new Error("纹理图集打包失败：贴图总面积超出 GPU 上限。");
@@ -1544,9 +1552,12 @@
     atlasE.ctx.fillStyle = "#000000";
     atlasE.ctx.fillRect(0, 0, S, S);
     atlasC.ctx.clearRect(0, 0, S, S);
-    slotList.forEach((slot, i) => {
-      const r = packed.rects[i];
+    const drawnSources = /* @__PURE__ */ new Set();
+    slotList.forEach((slot) => {
+      const r = packed.rects[slot.atlasIndex];
       slot.rect = r;
+      if (drawnSources.has(slot.atlasIndex)) return;
+      drawnSources.add(slot.atlasIndex);
       try {
         if (slot.color) {
           atlasC.ctx.clearRect(r.x, r.y, r.w, r.h);
