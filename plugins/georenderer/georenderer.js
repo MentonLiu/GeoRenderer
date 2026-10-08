@@ -4902,7 +4902,7 @@
       "",
       "项目与更新：https://github.com/MentonLiu/GeoRenderer"
     ].join("\n"),
-    version: "0.1.3",
+    version: "0.1.4",
     min_version: "4.8.0",
     variant: "both",
     tags: ["Rendering", "Preview"],
