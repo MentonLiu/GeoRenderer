@@ -5,15 +5,18 @@ import { isTraceStep, resolveRenderSize } from './workflow-state.js';
 
 const watchedPreviewImages = new WeakSet();
 
+// 将渲染错误同时写入控制台、界面覆盖层和 Blockbench 提示条。
 export function showError(err) {
 	console.error('[PathTracer]', err);
 	if (PTR.nodes.overlay) PTR.nodes.overlay.textContent = '错误: ' + (err && err.message ? err.message : err);
 	try { Blockbench.showQuickMessage('路径追踪出错: ' + (err && err.message ? err.message : err), 3000); } catch (e) { }
 }
 
+// 根据当前材质、几何和环境设置重建 GPU 场景，并监听尚未加载完成的贴图。
 export function rebuildScene() {
 	const t = PTR.tracer;
 	if (!t) return;
+	// 控件和延迟加载的图片都可能请求重建；窗口隐藏时只记录请求，重新打开时一次性完成重建。
 	if (!PTR.open || !isTraceStep(PTR.step)) { PTR.needsRebuild = true; return; }
 	try {
 		const scene = t.buildScene(PTR.settings, PTR.overrides, PTR.groupOverrides);
@@ -36,6 +39,7 @@ export function rebuildScene() {
 	}
 }
 
+// 根据窗口尺寸、设备上限和交互状态调整路径追踪帧缓冲大小。
 export function applyResolution() {
 	const t = PTR.tracer;
 	if (!t || !PTR.open || !isTraceStep(PTR.step) || !PTR.nodes.viewport) return;
@@ -53,6 +57,7 @@ export function applyResolution() {
 	updateWatermarkPreview();
 }
 
+// 切换相机交互状态：交互时降低单帧工作量，结束后清除旧的累积结果。
 export function setInteracting(on) {
 	if (PTR.interacting === on) return;
 	PTR.interacting = on;
@@ -64,6 +69,7 @@ export function setInteracting(on) {
 	if (PTR.settings.interactive_scale < 1) applyResolution();
 }
 
+// 生成只用于交互预览的低成本参数副本，不修改用户保存的原始设置。
 function interactiveSettings(settings) {
 	if (settings.max_bounce <= INTERACTIVE_MAX_BOUNCE && settings.light_samples <= 1) return settings;
 	const fast = Object.assign({}, settings);
@@ -72,10 +78,12 @@ function interactiveSettings(settings) {
 	return fast;
 }
 
+// 根据当前是预览还是最终导出，读取对应的样本目标。
 function currentMaxSamples() {
 	return PTR.settings.render_mode === 'final' ? PTR.settings.final_samples : PTR.settings.preview_samples;
 }
 
+// 更新样本进度、分块进度、性能统计和场景规模信息。
 export function updateStatus(scene) {
 	const t = PTR.tracer;
 	if (!t || !PTR.nodes.status) return;
@@ -110,6 +118,7 @@ export function updateStatus(scene) {
 	updateWatermarkPreview();
 }
 
+// 按渲染图像在视口中的实际缩放比例定位水印预览。
 function updateWatermarkPreview() {
 	const wm = PTR.nodes.watermark;
 	const t = PTR.tracer;
@@ -141,6 +150,7 @@ function updateWatermarkPreview() {
 	wm.textContent = s.watermark_text;
 }
 
+// 驱动逐帧路径追踪、最终分块推进、结果显示和动态性能调节。
 export function loop() {
 	if (!PTR.open || !isTraceStep(PTR.step)) return;
 	if (PTR.nodes.canvas && !PTR.nodes.canvas.isConnected) { closeRenderer(); return; }
@@ -169,7 +179,9 @@ export function loop() {
 	const maxSamples = currentMaxSamples();
 
 	try {
+		// 最终渲染一次推进一个带边缘填充的分块；预览则保留当前帧缓冲并渐进累积样本。
 		const job = PTR.finalRender;
+		// 最终渲染路径：样本达到目标后复制分块，否则持续更新当前分块的临时结果。
 		if (job) {
 			job.updateSamples(maxSamples, t);
 			if (job.completed) return;
@@ -179,6 +191,7 @@ export function loop() {
 				if (job.completed) return;
 			} else if (t.spp > 0) job.copyTile(t.canvas);
 		}
+		// 普通预览路径：样本完成后只需显示最终结果，不再提交新的 GPU pass。
 		if (t.spp >= maxSamples) {
 			if (PTR.needsPresent) { t.present(PTR.settings); t.endFrame?.(); PTR.needsPresent = false; }
 			updateStatus();
@@ -203,12 +216,14 @@ export function loop() {
 	updateStatus();
 }
 
+// 停止动画帧调度，但保留当前渲染器和结果供窗口恢复使用。
 export function pauseRenderer() {
 	PTR.open = false;
 	cancelAnimationFrame(PTR.raf);
 	PTR.raf = 0;
 }
 
+// 在仍处于可追踪步骤时恢复动画帧调度。
 export function resumeRenderer() {
 	if (!PTR.tracer || PTR.open || !isTraceStep(PTR.step)) return;
 	PTR.open = true;
@@ -217,6 +232,7 @@ export function resumeRenderer() {
 	loop();
 }
 
+// 关闭渲染器并释放观察器、GPU 资源，同时保存当前用户设置。
 export function closeRenderer() {
 	pauseRenderer();
 	if (PTR.resizeObs) { try { PTR.resizeObs.disconnect(); } catch (e) { } PTR.resizeObs = null; }

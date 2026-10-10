@@ -544,7 +544,7 @@ float distGGX(vec3 N, vec3 H, float a) {
 	float a2 = a * a;
 	float NoH = max(dot(N, H), 0.0);
 	vec3 NxH = cross(N, H);
-	// Avoid cancellation and a flattened reflection peak at low roughness.
+	// 避免低粗糙度时发生数值消减并导致反射峰被压平。
 	float d = dot(NxH, NxH) + a2 * NoH * NoH;
 	return a2 / max(PI * d * d, 1e-30);
 }
@@ -588,7 +588,7 @@ vec3 cosineSample(vec3 n, vec2 u) {
 	return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - u.x)));
 }
 
-// Heitz 2018, Sampling the GGX Distribution of Visible Normals (JCGT 7(4)).
+// Heitz 2018：GGX 可见法线分布采样（JCGT 7(4)）。
 vec3 ggxSampleH(vec3 n, vec3 V, float a, vec2 u) {
 	vec3 t, b;
 	onb(n, t, b);

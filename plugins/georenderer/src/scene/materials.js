@@ -5,6 +5,7 @@ import { packAtlas } from './atlas.js';
 import { MF_ADDITIVE, MF_EMIS_CUSTOM_COLOR, MF_EMIS_MAIN_COLOR, MF_FULLBRIGHT, MF_HAS_COLOR, MF_HAS_EMISSIVE_MAP, MF_HAS_MER, MF_HAS_NORMAL, MF_WRAP_REPEAT, getMaterialSide, textureSource } from './geometry.js';
 import { materialKey, resolveEmissionStrength, resolveMaterialOverride } from './group-overrides.js';
 
+// 收集并去重 Blockbench 纹理材质槽，然后上传四层图集和路径追踪器使用的紧凑材质记录。
 export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, groupOverrides) {
 	const slotList = [];
 	const slotOfKey = new Map();
@@ -97,6 +98,7 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 	if (!packed) throw new Error('纹理图集打包失败：贴图总面积超出 GPU 上限。');
 
 	const S = packed.size;
+	// 所有图集层共享同一组矩形；缺失图层用中性像素表示，让着色器对所有材质复用同一套坐标路径。
 	const mk = () => {
 		const c = document.createElement('canvas');
 		c.width = S; c.height = S;
@@ -173,6 +175,7 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 
 	const matData = new Float32Array(slotList.length * MAT_TEXELS * 4);
 	slotList.forEach((slot, i) => {
+		// 这里的五个 texel 是 CPU/GLSL 协议：颜色与标志、图集矩形、粗糙度/金属度/发光/IOR、Alpha 设置和发光颜色。
 		const o = i * MAT_TEXELS * 4;
 		const tex = slot.texture;
 		const preview = slot.previewMaterial;
@@ -180,7 +183,7 @@ export function buildMaterials(gl, texRefs, groupRefs, settings, overrides, grou
 			const tint = preview.color || { r: 1, g: 1, b: 1 };
 			const emissive = preview.emissive || { r: 0, g: 0, b: 0 };
 			const emissivePower = Math.max(emissive.r || 0, emissive.g || 0, emissive.b || 0) * (preview.emissiveIntensity ?? 1);
-			// Unlit Blockbench preview shading does not make walls/floors physical emitters.
+			// Blockbench 的无光栅预览材质不会让墙面或地面成为真实发光体。
 			const emits = emissivePower > 0;
 			let flags = slot.color ? MF_HAS_COLOR : 0;
 			if (preview.map?.wrapS === 1000 || preview.map?.wrapT === 1000) flags |= MF_WRAP_REPEAT;

@@ -1,6 +1,7 @@
 import { clamp, vAdd, vCross, vDot, vNorm, vScale, vSub } from '../core/math.js';
 
 export class OrbitCam {
+	// 保存围绕目标点的轨道相机参数，并提供渲染器需要的相机状态。
 	constructor() {
 		this.target = [0, 12, 0];
 		this.distance = 70;
@@ -10,6 +11,7 @@ export class OrbitCam {
 		this.ortho = false;
 	}
 	position() {
+		// 将球坐标轨道参数转换为世界空间相机位置。
 		const sp = Math.sin(this.phi), cp = Math.cos(this.phi);
 		return [
 			this.target[0] + this.distance * sp * Math.sin(this.theta),
@@ -18,6 +20,7 @@ export class OrbitCam {
 		];
 	}
 	state() {
+		// 返回不共享数组引用的渲染相机快照。
 		return {
 			pos: this.position(),
 			target: this.target.slice(),
@@ -27,10 +30,12 @@ export class OrbitCam {
 		};
 	}
 	orbit(dx, dy) {
+		// 根据指针位移修改方位角和俯仰角，并避开极点奇异位置。
 		this.theta -= dx * 0.008;
 		this.phi = clamp(this.phi - dy * 0.008, 0.02, Math.PI - 0.02);
 	}
 	pan(dx, dy, aspectScale) {
+		// 沿相机右向和上向移动目标点，实现平移而不是改变视线距离。
 		const pos = this.position();
 		const fwd = vNorm(vSub(this.target, pos));
 		let right = vCross(fwd, [0, 1, 0]);
@@ -41,14 +46,17 @@ export class OrbitCam {
 		this.target = vAdd(this.target, vAdd(vScale(right, -dx * scale), vScale(up, dy * scale)));
 	}
 	zoom(delta) {
+		// 采用指数缩放，让相同滚轮增量在远近距离下都保持相近手感。
 		this.distance = clamp(this.distance * Math.exp(delta * 0.0012), 0.5, 20000);
 	}
 	frameBounds(bounds) {
+		// 将目标点和距离调整到能完整包围场景边界的取景位置。
 		if (!bounds) return;
 		this.target = bounds.center.slice();
 		this.distance = Math.max(bounds.radius * 2.6, 4);
 	}
 	syncFromPreview() {
+		// 从 Blockbench 当前预览相机读取位置、目标点、FOV 和投影模式。
 		try {
 			const prev = (typeof Preview !== 'undefined') ? Preview.selected : null;
 			if (!prev || !prev.camera) return false;

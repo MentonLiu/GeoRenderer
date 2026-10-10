@@ -77,6 +77,7 @@ export const PTR = {
 	spsEma: 0,
 };
 
+// 将秒数格式化为界面使用的秒、分秒或时分文本。
 export function formatDuration(sec) {
 	if (!isFinite(sec) || sec < 0) return '--';
 	if (sec < 90) return sec.toFixed(0) + 's';
@@ -84,11 +85,13 @@ export function formatDuration(sec) {
 	return Math.floor(sec / 3600) + 'h' + Math.round((sec % 3600) / 60) + 'm';
 }
 
+// 从本地存储恢复设置和材质覆盖；单个损坏存档不会阻止插件启动。
 export function loadSettings() {
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
 		if (raw) {
 			const data = JSON.parse(raw);
+			// 只读取默认表声明的键，避免旧版本或外部字段污染运行时状态。
 			for (const k in DEFAULTS) if (data[k] !== undefined) PTR.settings[k] = data[k];
 			migrateBackgroundSelection(data);
 			if (data.__overrides) PTR.overrides = data.__overrides;
@@ -97,10 +100,12 @@ export function loadSettings() {
 	} catch (err) { }
 }
 
+// 将旧版本的 scene_preset 字段迁移到现在的 background_preset 字段。
 export function migrateBackgroundSelection(data) {
 	if (data.background_preset === undefined) PTR.settings.background_preset = data.scene_preset || '';
 }
 
+// 持久化设置及两类覆盖表，供下一次打开插件时恢复。
 export function saveSettings() {
 	try {
 		const data = Object.assign({}, PTR.settings);
@@ -110,6 +115,7 @@ export function saveSettings() {
 	} catch (err) { }
 }
 
+// 延迟刷新栅格材质预览，合并短时间内连续发生的设置变更。
 export function refreshRasterMaterials() {
 	clearTimeout(PTR.rasterRefreshTimer);
 	if (PTR.raster) PTR.rasterRefreshTimer = setTimeout(() => PTR.raster?.refreshModel(), 60);

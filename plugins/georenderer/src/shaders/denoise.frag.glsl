@@ -58,8 +58,8 @@ void main() {
 	float varP = loadVariance(px, size);
 	float depthP = loadDepth(px, size);
 	float roughness = texelFetch(uAlbedoTex, px, 0).a * uInvSpp;
-	// Preserve background texture detail instead of smoothing it with the model denoiser.
-	// Mirror reflections already converge well; broad filtering would erase their detail.
+	// 保留背景纹理细节，不让模型去噪器把它过度平滑。
+	// 镜面反射本身已经较快收敛，扩大滤波范围反而会抹掉反射细节。
 	if (depthP >= 999999.0 || roughness < 0.1 || (roughness < 0.4 && uStepSize > 2)) {
 		fragColor = vec4(cp, 1.0);
 		outVariance = varP;
@@ -97,7 +97,7 @@ void main() {
 			float dd = abs(depthP - depthQ);
 			float wd = (depthP > 1.0e5 || depthQ > 1.0e5) ? (dd < 1.0 ? 1.0 : 0.0)
 				: exp(-dd * dd / max(uPhiDepth * depthP * depthP + 1e-6, 1e-6));
-			// Material texture edges must remain boundaries even at high denoise strength.
+			// 即使去噪强度很高，材质纹理边缘也必须继续作为边界保留。
 			vec3 da = ap - aq;
 			float wa = exp(-dot(da, da) / 0.0025);
 			float wm = exp(-16.0 * abs(materialP - materialQ));

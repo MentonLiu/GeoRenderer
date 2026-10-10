@@ -12,6 +12,7 @@ export const MF_HAS_EMISSIVE_MAP = 64;
 export const MF_EMIS_MAIN_COLOR = 128;
 export const MF_EMIS_CUSTOM_COLOR = 256;
 
+// 按显式覆盖、纹理属性和 Blockbench 全局设置解析材质的正反面剔除模式。
 export function getMaterialSide(tex, override) {
 	if (override === 'double') return 'double';
 	if (override === 'front') return 'front';
@@ -33,6 +34,7 @@ export function getMaterialSide(tex, override) {
 	return 'double';
 }
 
+// 从 Blockbench 纹理对象中提取可被 Canvas/WebGL 使用的图像源。
 export function textureSource(tex) {
 	if (!tex) return null;
 	if (tex.canvas && tex.canvas.width > 1 && tex.canvas.height > 1) return tex.canvas;
@@ -40,6 +42,7 @@ export function textureSource(tex) {
 	return null;
 }
 
+// 为展开后的每个三角形解析所属立方体面或网格面键。
 function faceKeysPerTriangle(element, triCount) {
 	try {
 		if (element instanceof Cube) {
@@ -73,6 +76,7 @@ function faceKeysPerTriangle(element, triCount) {
 	return null;
 }
 
+// 建立 Three.js 材质到 Blockbench 纹理的反向索引，用于补齐网格材质引用。
 function buildMaterialLookup() {
 	const map = new Map();
 	try {
@@ -92,6 +96,7 @@ function buildMaterialLookup() {
 	return map;
 }
 
+// 将所有可见网格展平为三角形对齐数组；索引 t 始终描述同一个三角形，必须在 BVH 重排和 GPU 打包中保持同步。
 export function collectGeometry() {
 	const positions = [];
 	const normals = [];
@@ -281,6 +286,7 @@ export function collectGeometry() {
 	};
 }
 
+// 计算 3x3 矩阵的行列式，用于检测镜像变换。
 function mat3Determinant(m) {
 	const a = m[0], b = m[1], c = m[2];
 	const d = m[4], e = m[5], f = m[6];
@@ -288,6 +294,7 @@ function mat3Determinant(m) {
 	return a * (e * i - f * h) - d * (b * i - c * h) + g * (b * f - c * e);
 }
 
+// 使用 4x4 世界矩阵将局部顶点转换到世界空间。
 function transformPoint(m, x, y, z) {
 	return [
 		m[0] * x + m[4] * y + m[8] * z + m[12],
@@ -296,6 +303,7 @@ function transformPoint(m, x, y, z) {
 	];
 }
 
+// 使用法线矩阵转换方向，并保持方向向量的正确归一化。
 function transformDir(nm, x, y, z) {
 	return [
 		nm[0] * x + nm[3] * y + nm[6] * z,
@@ -304,6 +312,7 @@ function transformDir(nm, x, y, z) {
 	];
 }
 
+// 从世界矩阵计算用于法线变换的逆转置 3x3 矩阵。
 function normalMatrix3(m) {
 	const a = m[0], b = m[1], c = m[2];
 	const d = m[4], e = m[5], f = m[6];
