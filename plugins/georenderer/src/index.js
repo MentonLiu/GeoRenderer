@@ -28,7 +28,7 @@ Plugin.register(PLUGIN_ID, {
 		'',
 		'项目与更新：https://github.com/MentonLiu/GeoRenderer'
 	].join('\n'),
-	version: '0.1.5',
+	version: '0.1.6',
 	min_version: '4.8.0',
 	variant: 'both',
 	tags: ['Rendering', 'Preview'],
