@@ -7,7 +7,7 @@ import { RasterMaterials } from './raster-materials.js';
 import { RasterEnvironment } from './raster-environment.js';
 import { environmentCycle } from '../scene/day-cycle.js';
 
-// Camera setup uses a lightweight preview before path-tracing buffers exist.
+// 在路径追踪缓冲创建前先使用轻量栅格预览完成相机和材质检查。
 export class RasterPreview {
 	constructor(canvas) {
 		this.canvas = canvas;

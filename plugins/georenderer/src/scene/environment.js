@@ -2,6 +2,7 @@ import { ENV_DIST_H, ENV_DIST_W, ENV_H, ENV_W } from '../core/config.js';
 import { clamp, hexToLinear, vNorm } from '../core/math.js';
 import { applyEnvironmentCycle, environmentCycle } from './day-cycle.js';
 
+// 将 Radiance RGBE 解码为线性浮点 RGBA 像素；当前只接受常见的 -Y +X 扫描顺序。
 export function parseHDR(buffer) {
 	const bytes = new Uint8Array(buffer);
 	let pos = 0;
@@ -69,6 +70,7 @@ export function parseHDR(buffer) {
 		}
 	}
 
+	// RGBE 为每个像素保存 RGB 尾数和一个共享的二进制指数。
 	const data = new Float32Array(width * height * 4);
 	for (let i = 0; i < width * height; i++) {
 		const e = rgbe[i * 4 + 3];
@@ -81,6 +83,7 @@ export function parseHDR(buffer) {
 	return { width: width, height: height, data: data };
 }
 
+// 对等距柱状环境图进行双线性重采样，并在经度方向保持周期连续。
 export function resampleEquirect(src, w, h) {
 	const out = new Float32Array(w * h * 4);
 	const sw = src.width, sh = src.height;
@@ -109,6 +112,7 @@ export function resampleEquirect(src, w, h) {
 	return out;
 }
 
+// 按天空、渐变或纯色模式生成程序化环境像素，并叠加太阳与昼夜颜色。
 export function generateSkyPixels(settings, w = ENV_W, h = ENV_H) {
 	const out = new Float32Array(w * h * 4);
 	const mode = settings.env_mode;
@@ -173,6 +177,7 @@ export function generateSkyPixels(settings, w = ENV_W, h = ENV_H) {
 	return applyEnvironmentCycle(out, settings);
 }
 
+// 将太阳高度角和方位角转换为归一化世界空间方向。
 export function sunDirection(settings) {
 	const el = settings.sun_elevation * Math.PI / 180;
 	const az = settings.sun_azimuth * Math.PI / 180;
@@ -185,6 +190,7 @@ export function buildEnvDistribution(pixels, w, h) {
 	const bx = Math.max(1, Math.floor(w / DW));
 	const by = Math.max(1, Math.floor(h / DH));
 
+	// 重要性采样使用乘以 sin(theta) 的亮度，把等距柱状图纬度行转换为近似等立体角权重；cond 按行采样经度，marg 采样纬度。
 	const lum = new Float32Array(DW * DH);
 	let total = 0;
 	for (let y = 0; y < DH; y++) {

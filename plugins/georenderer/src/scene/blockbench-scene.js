@@ -1,7 +1,7 @@
 import { srgbToLinear } from '../core/math.js';
 import { MAX_ENV_IMAGE_SIZE } from '../core/config.js';
 
-// Retain one high-resolution conversion so browsing presets cannot accumulate large panoramas.
+// 只保留一份高分辨率转换结果，浏览预设时不会不断累积全景图内存。
 let convertedCubemap = null;
 let convertedEnvironment = null;
 const linearByte = Float32Array.from({ length: 256 }, (_, value) => srgbToLinear(value / 255));
@@ -10,10 +10,12 @@ let selectedSceneId = '';
 let sceneSelectionRequest = 0;
 let previewModelOverrides = {};
 
+// 恢复独立参照模型的启用覆盖表，不直接修改 Blockbench 主视图状态。
 export function restoreBlockbenchPreviewModelOverrides(overrides) {
 	previewModelOverrides = overrides && typeof overrides === 'object' ? { ...overrides } : {};
 }
 
+// 设置指定参照模型在 GeoRenderer 中的启用状态，并返回新的覆盖表副本。
 export function setBlockbenchPreviewModelEnabled(id, enabled) {
 	const model = typeof PreviewModel !== 'undefined' ? PreviewModel.models?.[id] : null;
 	const nativeEnabled = !!(model && PreviewModel.getActiveModels?.().includes(model));
@@ -23,6 +25,7 @@ export function setBlockbenchPreviewModelEnabled(id, enabled) {
 	return { ...previewModelOverrides };
 }
 
+// 收集被 Blockbench 场景拥有的模型，用于排除重复列出的独立模型。
 function sceneOwnedModels() {
 	return new Set(
 		Object.values(typeof PreviewScene !== 'undefined' ? PreviewScene.scenes || {} : {})
@@ -30,26 +33,32 @@ function sceneOwnedModels() {
 	);
 }
 
+// 列出可供 GeoRenderer 独立控制的预览模型。
 export function listBlockbenchPreviewModels() {
 	const owned = sceneOwnedModels();
 	const active = new Set(typeof PreviewModel !== 'undefined' && PreviewModel.getActiveModels
 		? PreviewModel.getActiveModels() : []);
 	return Object.values(typeof PreviewModel !== 'undefined' ? PreviewModel.models || {} : {})
 		.filter(model => !model.internal && !owned.has(model) && model.model_3d?.isObject3D)
-		.map(model => ({ id: model.id, name: model.name || model.id,
-			enabled: Object.hasOwn(previewModelOverrides, model.id) ? !!previewModelOverrides[model.id] : active.has(model) }));
+		.map(model => ({
+			id: model.id, name: model.name || model.id,
+			enabled: Object.hasOwn(previewModelOverrides, model.id) ? !!previewModelOverrides[model.id] : active.has(model)
+		}));
 }
 
+// 按 ID 获取 Blockbench 预览场景，不存在时返回空值。
 export function getBlockbenchScene(id) {
 	return typeof PreviewScene !== 'undefined' ? PreviewScene.scenes?.[id] || null : null;
 }
 
+// 恢复场景选择并递增请求序号，使旧的异步选择结果失效。
 export function restoreBlockbenchSceneSelection(id) {
 	sceneSelectionRequest++;
 	selectedSceneId = getBlockbenchScene(id)?.id || '';
 	return activeBlockbenchScene();
 }
 
+// 请求场景所需许可和延迟资源，并确保场景模型已经启用。
 async function prepareScene(scene, includeModels = true) {
 	if (scene.require_minecraft_eula) {
 		if (typeof MinecraftEULA === 'undefined' || !await MinecraftEULA.promptUser('preview_scenes')) return false;
@@ -69,6 +78,7 @@ async function prepareScene(scene, includeModels = true) {
 	return true;
 }
 
+// 将方向向量映射到立方体面的编号和面内 UV 坐标。
 function cubeFace(x, y, z) {
 	const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
 	if (ax >= ay && ax >= az) return x > 0 ? [0, -z / ax, -y / ax] : [1, z / ax, -y / ax];
@@ -76,6 +86,7 @@ function cubeFace(x, y, z) {
 	return z > 0 ? [4, x / az, -y / az] : [5, -x / az, -y / az];
 }
 
+// 将六面体环境贴图转换为线性浮点等距柱状环境图。
 export function cubemapToEquirect(cubemap, width, height) {
 	const faces = cubemap && cubemap.image;
 	if (!Array.isArray(faces) || faces.length !== 6) return null;
@@ -97,6 +108,7 @@ export function cubemapToEquirect(cubemap, width, height) {
 		const longitude = 2 * Math.PI * ((x + 0.5) / width - 0.5);
 		return [Math.cos(longitude), Math.sin(longitude)];
 	});
+	// 按纬度和经度逐像素采样，并对立方体面数据执行双线性插值。
 	for (let y = 0; y < height; y++) {
 		const latitude = Math.PI * (0.5 - (y + 0.5) / height);
 		const cosLatitude = Math.cos(latitude), sinLatitude = Math.sin(latitude);
@@ -122,6 +134,7 @@ export function cubemapToEquirect(cubemap, width, height) {
 	return { width, height, data };
 }
 
+// 检查六个立方体面是否已拥有可读取的完整图片。
 function cubemapReady(cubemap) {
 	const faces = cubemap?.image;
 	return Array.isArray(faces) && faces.length === 6 && Array.from({ length: 6 }, (_, index) => faces[index]).every(face => {
@@ -131,6 +144,7 @@ function cubemapReady(cubemap) {
 	});
 }
 
+// 等待立方体贴图完成加载，超时则中止，避免渲染循环永久等待。
 async function waitForCubemap(cubemap, timeout = 15000) {
 	const deadline = Date.now() + timeout;
 	while (!cubemapReady(cubemap)) {
@@ -139,6 +153,7 @@ async function waitForCubemap(cubemap, timeout = 15000) {
 	}
 }
 
+// 加载指定场景并缓存其等距柱状环境转换结果。
 export async function loadBlockbenchScene(id, { includeModels = true } = {}) {
 	const scene = getBlockbenchScene(id);
 	if (!scene) return null;
@@ -153,6 +168,7 @@ export async function loadBlockbenchScene(id, { includeModels = true } = {}) {
 	return { cubemap, environment: convertedEnvironment };
 }
 
+// 合并场景模型、原生激活模型和用户独立覆盖后的最终模型列表。
 export function activeBlockbenchPreviewModels() {
 	const scene = activeBlockbenchScene();
 	const sceneModels = scene?.preview_models || [];
@@ -168,6 +184,7 @@ export function activeBlockbenchPreviewModels() {
 	return [...new Set([...sceneModels, ...independent])].filter(model => model?.model_3d?.isObject3D);
 }
 
+// 返回 Blockbench 中可选择的场景摘要列表。
 export function listBlockbenchScenes() {
 	if (typeof PreviewScene === 'undefined') return [];
 	return Object.values(PreviewScene.scenes || {}).map(scene => ({
@@ -177,10 +194,12 @@ export function listBlockbenchScenes() {
 	}));
 }
 
+// 返回当前已选场景。
 export function activeBlockbenchScene() {
 	return getBlockbenchScene(selectedSceneId);
 }
 
+// 异步选择场景，并用请求序号丢弃过期的异步结果。
 export async function selectBlockbenchScene(id) {
 	const request = ++sceneSelectionRequest;
 	if (!id) { selectedSceneId = ''; return true; }

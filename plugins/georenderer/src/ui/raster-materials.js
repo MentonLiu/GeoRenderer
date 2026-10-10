@@ -6,7 +6,7 @@ function linearColor(color, value) {
 	color.setRGB(...hexToLinear(value));
 }
 
-// Own GPU texture copies so color encoding never changes Blockbench's textures.
+// 使用独立的 GPU 纹理副本，避免颜色编码转换修改 Blockbench 原始纹理。
 export class RasterMaterials {
 	constructor(settings, overrides, groupOverrides) {
 		this.settings = settings;

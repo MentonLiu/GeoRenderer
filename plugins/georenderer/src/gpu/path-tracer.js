@@ -10,6 +10,7 @@ import { buildMaterials } from '../scene/materials.js';
 import { materialKey } from '../scene/group-overrides.js';
 import { applyEnvironmentCycle, environmentCycle } from '../scene/day-cycle.js';
 
+// 管理 WebGL 资源和多阶段渲染管线；CPU 场景数据会打包进纹理，由片元着色器完成路径追踪。
 export class PathTracer {
 	constructor(canvas) {
 		this.canvas = canvas;
@@ -101,6 +102,7 @@ export class PathTracer {
 		const mats = buildMaterials(gl, geo.texRefs, geo.groupRefs, settings, overrides, groupOverrides);
 		const bvh = buildBVH(geo.positions, geo.triCount);
 
+		// BVH 的重排顺序必须同时应用到三角形数据，否则叶节点遍历会指向无关三角形。
 		const n = geo.triCount;
 		const triPos = new Float32Array(n * TRI_POS_TEXELS * 4);
 		const triAttr = new Float32Array(n * TRI_ATTR_TEXELS * 4);
@@ -226,7 +228,7 @@ export class PathTracer {
 		} else {
 			pixels = generateSkyPixels(settings);
 		}
-		// Keep lighting importance sampling small while retaining background image detail.
+		// 将重要性采样分布保持在较小尺寸，同时保留背景图像的原始细节。
 		const distributionPixels = w === ENV_W && h === ENV_H ? pixels : resampleEquirect({ width: w, height: h, data: pixels }, ENV_W, ENV_H);
 		const dist = buildEnvDistribution(distributionPixels, ENV_W, ENV_H);
 		this.env = {
@@ -250,7 +252,7 @@ export class PathTracer {
 			throw new Error('渲染缓冲超过显存预算，请使用分块渲染');
 		}
 		if (this.width === w && this.height === h && this.buffers) return;
-		// Resizes are infrequent; finish pending work before releasing old allocations.
+		// 尺寸变化不频繁；释放旧资源前先完成尚未结束的 GPU 工作。
 		gl.finish();
 		this.clearFrameSync();
 		this.disposeBuffers();

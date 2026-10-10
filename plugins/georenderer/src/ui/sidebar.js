@@ -60,7 +60,7 @@ export async function syncBlockbenchBackground() {
 		const loaded = scene && PTR.customEnvSource !== 'file' ? await loadBlockbenchScene(scene.id, { includeModels: false }) : null;
 		if (request !== PTR.backgroundPresetRequest) return;
 		if (scene && PTR.customEnvSource !== 'file' && !loaded) throw new Error('背景未能加载，请检查 Minecraft EULA 状态');
-		// Blockbench's studio has no skybox; give its independent background a neutral studio gradient.
+		// Blockbench 工作室没有天空盒，为独立背景提供中性的工作室渐变。
 		if (loaded && !loaded.environment && scene.id === 'studio') {
 			loaded.environment = { width: 512, height: 256, data: generateSkyPixels({ ...PTR.settings, ...SCENE_PRESETS.studio, day_cycle: false, sun_enable: false }, 512, 256) };
 		}
@@ -112,11 +112,11 @@ export function buildSidebar() {
 	PTR.controls = [];
 
 	const resolutionCard = card('成片尺寸', 'photo_size_select_large', [
-			rowSelect('分辨率', 'res_mode', { fit: '自适应窗口', custom: '自定义' }),
-			rowNumber('宽度', 'res_width', 32, 8192, 1),
-			rowNumber('高度', 'res_height', 32, 8192, 1),
-			el('div', { class: 'ptr_note', text: '画面左侧按最终长宽比取景；最终渲染使用这里的尺寸。' }),
-		]);
+		rowSelect('分辨率', 'res_mode', { fit: '自适应窗口', custom: '自定义' }),
+		rowNumber('宽度', 'res_width', 32, 8192, 1),
+		rowNumber('高度', 'res_height', 32, 8192, 1),
+		el('div', { class: 'ptr_note', text: '画面左侧按最终长宽比取景；最终渲染使用这里的尺寸。' }),
+	]);
 	const renderCards = [
 		card('预览质量', 'preview', [
 			rowSlider('预览比例', 'preview_scale', 0.25, 1, 0.05, 2),

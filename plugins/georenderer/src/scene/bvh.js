@@ -1,5 +1,8 @@
 import { MAX_LEAF_TRIS, SAH_BINS } from '../core/config.js';
 
+// 为 GPU 构建扁平 BVH；每个节点占用 8 个浮点数：
+// [最小 X、最小 Y、最小 Z、左子节点或三角形起点、最大 X、最大 Y、最大 Z、三角形数量]。
+// triCount 为 0 表示内部节点，右子节点索引固定为 leftChild + 1。
 export function buildBVH(positions, triCount) {
 	if (triCount === 0) {
 		const nodes = new Float32Array(8);
@@ -54,6 +57,7 @@ export function buildBVH(positions, triCount) {
 			if (cent[t3 + 2] > cxz) cxz = cent[t3 + 2];
 		}
 
+		// order 还会被 PathTracer 用来打包三角形纹理，因此每次分割都必须保留该排列供 GPU 遍历。
 		const no = nodeIdx * 8;
 		nodes[no] = nx; nodes[no + 1] = ny; nodes[no + 2] = nz;
 		nodes[no + 4] = xx; nodes[no + 5] = xy; nodes[no + 6] = xz;
